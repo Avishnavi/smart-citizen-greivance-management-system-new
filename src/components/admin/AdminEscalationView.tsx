@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import type { Complaint } from '../../types';
+import { parseSafeDate } from '../../utils/dateUtils';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { CategoryIcon } from '../common/CategoryIcon';
 import {
@@ -45,14 +46,16 @@ export const AdminEscalationView: React.FC<AdminEscalationViewProps> = ({
     // Overdue (created > 2 days ago and not resolved, or high priority > 1 day)
     const overdueList = complaints.filter((c) => {
       if (c.status === 'Resolved') return false;
-      const ageHours = (now - new Date(c.createdAt).getTime()) / (1000 * 60 * 60);
+      const createdTime = parseSafeDate(c.createdAt)?.getTime() || now;
+      const ageHours = (now - createdTime) / (1000 * 60 * 60);
       return ageHours > 48 || (c.priority === 'High' && ageHours > 24);
     });
 
     // SLA Approaching (age between 12h and 36h)
     const slaApproachingList = complaints.filter((c) => {
       if (c.status === 'Resolved') return false;
-      const ageHours = (now - new Date(c.createdAt).getTime()) / (1000 * 60 * 60);
+      const createdTime = parseSafeDate(c.createdAt)?.getTime() || now;
+      const ageHours = (now - createdTime) / (1000 * 60 * 60);
       return ageHours >= 12 && ageHours <= 48;
     });
 
@@ -64,7 +67,8 @@ export const AdminEscalationView: React.FC<AdminEscalationViewProps> = ({
     // Long Pending (> 24 hours in Pending status)
     const longPendingList = complaints.filter((c) => {
       if (c.status !== 'Pending') return false;
-      const ageHours = (now - new Date(c.createdAt).getTime()) / (1000 * 60 * 60);
+      const createdTime = parseSafeDate(c.createdAt)?.getTime() || now;
+      const ageHours = (now - createdTime) / (1000 * 60 * 60);
       return ageHours >= 24;
     });
 

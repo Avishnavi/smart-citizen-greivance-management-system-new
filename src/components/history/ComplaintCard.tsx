@@ -5,6 +5,7 @@ import { StatusBadge } from '../common/StatusBadge';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { CategoryIcon } from '../common/CategoryIcon';
 import { MapPin, Calendar, ArrowRight, Volume2, Image as ImageIcon } from 'lucide-react';
+import { formatDate } from '../../utils/dateUtils';
 
 interface ComplaintCardProps {
   complaint: Complaint;
@@ -19,18 +20,6 @@ export const ComplaintCard: React.FC<ComplaintCardProps> = ({
 
   const handleTrackClick = () => {
     navigate(`/track?id=${complaint.id}`);
-  };
-
-  const formatDate = (iso: string) => {
-    try {
-      return new Date(iso).toLocaleDateString([], {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric'
-      });
-    } catch {
-      return iso;
-    }
   };
 
   return (

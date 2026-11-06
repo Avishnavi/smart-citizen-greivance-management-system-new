@@ -10,6 +10,7 @@ import {
   MapPin,
   Clock
 } from 'lucide-react';
+import { formatDate } from '../../utils/dateUtils';
 
 interface DuplicateAlertCardProps {
   duplicate: DuplicateDetectionResult;
@@ -74,7 +75,7 @@ export const DuplicateAlertCard: React.FC<DuplicateAlertCardProps> = ({
             </div>
             <div className="flex items-center gap-1">
               <Clock className="w-3.5 h-3.5 text-slate-400" />
-              <span>Reported {new Date(existing.createdAt).toLocaleDateString()}</span>
+              <span>Reported {formatDate(existing.createdAt)}</span>
             </div>
           </div>
         </div>

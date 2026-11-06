@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useComplaints } from '../context/ComplaintContext';
 import type { Complaint, Department, ComplaintStatus } from '../types';
+import { parseSafeDate } from '../utils/dateUtils';
 import { PriorityBadge } from '../components/common/PriorityBadge';
 import { CategoryIcon } from '../components/common/CategoryIcon';
 import { HotspotMap } from '../components/admin/HotspotMap';
@@ -106,12 +107,15 @@ export const AdminDashboard: React.FC = () => {
   // Overview Charts Data
   const trendData = useMemo(() => {
     const datesMap: Record<string, { date: string; total: number; resolved: number }> = {};
-    const sorted = [...complaints].sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-    );
+    const sorted = [...complaints].sort((a, b) => {
+      const ta = parseSafeDate(a.createdAt)?.getTime() || 0;
+      const tb = parseSafeDate(b.createdAt)?.getTime() || 0;
+      return ta - tb;
+    });
 
     sorted.forEach((c) => {
-      const d = new Date(c.createdAt).toLocaleDateString('en-US', {
+      const dateObj = parseSafeDate(c.createdAt) || new Date(c.createdAt);
+      const d = dateObj.toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
       });

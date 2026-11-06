@@ -4,11 +4,13 @@ const path = require('path');
 // Load environment variables from server/.env or root .env
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
+require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const mongoose = require('mongoose');
 
 const { connectDatabase } = require('./config/database');
 const { errorHandler } = require('./middleware/errorHandler');
@@ -58,8 +60,15 @@ app.use('/api/', apiLimiter);
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => {
+  const isDbConnected = mongoose.connection.readyState === 1;
   res.json({
     status: 'healthy',
+    database: {
+      connected: isDbConnected,
+      type: (process.env.MONGODB_URI || process.env.MONGO_URI) ? 'MongoDB Atlas' : 'In-Memory',
+      host: isDbConnected ? mongoose.connection.host : null,
+      name: isDbConnected ? mongoose.connection.name : null,
+    },
     timestamp: new Date().toISOString(),
     service: 'Smart City Grievance API',
     version: '1.0.0',

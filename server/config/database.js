@@ -1,5 +1,11 @@
 'use strict';
 
+const path = require('path');
+// Ensure environment variables are loaded
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
+require('dotenv').config({ path: path.join(__dirname, '../../.env') });
+require('dotenv').config();
+
 const mongoose = require('mongoose');
 
 let isConnected = false;
@@ -14,7 +20,7 @@ async function connectDatabase() {
     return;
   }
 
-  const uri = process.env.MONGODB_URI;
+  const uri = process.env.MONGODB_URI || process.env.MONGO_URI;
 
   if (uri) {
     try {
@@ -22,7 +28,7 @@ async function connectDatabase() {
       await mongoose.connect(uri, {
         dbName,
         maxPoolSize: 10,
-        serverSelectionTimeoutMS: 3000,
+        serverSelectionTimeoutMS: 10000,
         socketTimeoutMS: 45000,
       });
 

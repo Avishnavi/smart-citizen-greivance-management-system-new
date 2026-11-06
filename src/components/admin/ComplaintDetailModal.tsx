@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import type { Complaint, Department, ComplaintStatus } from '../../types';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { CategoryIcon } from '../common/CategoryIcon';
+import { formatDateTime, formatDate, formatCompactDateTime } from '../../utils/dateUtils';
 import {
   X,
   MapPin,
@@ -206,7 +207,7 @@ export const ComplaintDetailModal: React.FC<ComplaintDetailModalProps> = ({
                 <PriorityBadge priority={complaint.priority} size="sm" />
               </div>
               <p className="text-xs text-slate-500">
-                Logged on {new Date(complaint.createdAt).toLocaleString()}
+                Logged on {formatDateTime(complaint.createdAt)}
               </p>
             </div>
           </div>
@@ -579,7 +580,7 @@ export const ComplaintDetailModal: React.FC<ComplaintDetailModalProps> = ({
                   Official Field Resolution & Verification
                 </span>
                 <span className="text-[10px] font-bold text-emerald-800 bg-emerald-200/80 px-2 py-0.5 rounded-full">
-                  Resolved on {new Date(complaint.resolution.resolvedAt).toLocaleDateString()}
+                  Resolved on {formatDate(complaint.resolution.resolvedAt)}
                 </span>
               </div>
 
@@ -641,14 +642,7 @@ export const ComplaintDetailModal: React.FC<ComplaintDetailModalProps> = ({
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-slate-800">{event.title}</span>
                         <span className="text-[10px] text-slate-400">
-                          {event.timestamp && event.timestamp !== 'Pending'
-                            ? new Date(event.timestamp).toLocaleString([], {
-                                month: 'short',
-                                day: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })
-                            : 'Pending'}
+                          {formatCompactDateTime(event.timestamp)}
                         </span>
                       </div>
                       <p className="text-slate-600 text-[11px] mt-0.5">{event.description}</p>

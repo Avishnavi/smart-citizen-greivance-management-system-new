@@ -12,6 +12,7 @@ import type {
 import { fetchApi } from './api';
 import { INITIAL_COMPLAINTS } from '../mock/complaints';
 import { runFullAIAnalysis } from './aiService';
+import { toCanonicalIso } from '../utils/dateUtils';
 
 export interface CreateComplaintInput {
   citizenId?: string;
@@ -168,7 +169,7 @@ function normalizeComplaint(c: any): Complaint {
         step: idx + 1,
         title: cleanTitle,
         description: t.description || '',
-        timestamp: t.timestamp || (t.createdAt ? new Date(t.createdAt).toLocaleString() : 'Pending'),
+        timestamp: t.timestamp ? toCanonicalIso(t.timestamp) : (t.createdAt ? toCanonicalIso(t.createdAt) : 'Pending'),
         completed: isLast ? isFinalStatus : true,
         current: isLast ? !isFinalStatus : false,
         officerName: t.officerName || t.metadata?.assignedOfficerName || (t.actor?.type === 'officer' ? t.actor?.name : undefined),
@@ -182,7 +183,7 @@ function normalizeComplaint(c: any): Complaint {
         step: 1,
         title: 'Complaint Submitted',
         description: 'Complaint registered via Citizen Portal with location details.',
-        timestamp: c.createdAt ? new Date(c.createdAt).toLocaleString() : 'Just now',
+        timestamp: toCanonicalIso(c.createdAt),
         completed: true,
         current: false,
       },
@@ -191,7 +192,7 @@ function normalizeComplaint(c: any): Complaint {
         step: 2,
         title: 'Complaint Received / Under Review',
         description: 'Grievance verified and queued for municipal dispatch.',
-        timestamp: c.createdAt ? new Date(c.createdAt).toLocaleString() : 'Just now',
+        timestamp: toCanonicalIso(c.createdAt),
         completed: isAssigned || isInProgress || isResolved,
         current: !isAssigned && !isInProgress && !isResolved,
       },
@@ -202,7 +203,7 @@ function normalizeComplaint(c: any): Complaint {
         description: (c.assignedOfficer || c.routing?.assignedOfficerName)
           ? `Assigned to ${c.assignedOfficer || c.routing?.assignedOfficerName} (${c.department || c.routing?.departmentName || 'Municipal Dept'}).`
           : `Queued for field dispatch to ${c.department || 'Municipal Dept'}.`,
-        timestamp: isAssigned ? (c.updatedAt ? new Date(c.updatedAt).toLocaleString() : 'Assigned') : 'Pending',
+        timestamp: isAssigned ? toCanonicalIso(c.updatedAt || c.createdAt) : 'Pending',
         completed: isInProgress || isResolved,
         current: isAssigned && !isInProgress && !isResolved,
         officerName: c.assignedOfficer || c.routing?.assignedOfficerName,
@@ -217,7 +218,7 @@ function normalizeComplaint(c: any): Complaint {
           : isResolved
           ? 'Field crew repair work completed.'
           : 'Pending dispatch of field crew.',
-        timestamp: isInProgress || isResolved ? (c.updatedAt ? new Date(c.updatedAt).toLocaleString() : 'In Progress') : 'Pending',
+        timestamp: isInProgress || isResolved ? toCanonicalIso(c.updatedAt || c.createdAt) : 'Pending',
         completed: isResolved,
         current: isInProgress,
         officerName: c.assignedOfficer || c.routing?.assignedOfficerName,
@@ -229,7 +230,7 @@ function normalizeComplaint(c: any): Complaint {
         description: isResolved
           ? (c.resolution?.resolutionNotes || 'Grievance resolved and verified by municipal team.')
           : 'Pending resolution verification and on-site testing.',
-        timestamp: isResolved ? (c.resolution?.resolvedAt || c.updatedAt || 'Resolved') : 'Pending',
+        timestamp: isResolved ? toCanonicalIso(c.resolution?.resolvedAt || c.updatedAt || c.createdAt) : 'Pending',
         completed: isResolved,
         current: isResolved && !isFeedbackDone,
       },
@@ -240,7 +241,7 @@ function normalizeComplaint(c: any): Complaint {
         description: isFeedbackDone
           ? `Citizen satisfaction rating: ${c.feedback.rating}/5 stars.`
           : 'Citizen post-resolution verification and satisfaction rating.',
-        timestamp: isFeedbackDone ? (c.feedback.submittedAt || 'Completed') : 'Pending',
+        timestamp: isFeedbackDone ? toCanonicalIso(c.feedback.submittedAt || c.updatedAt) : 'Pending',
         completed: isFeedbackDone,
         current: isResolved && !isFeedbackDone,
       },
@@ -272,8 +273,8 @@ function normalizeComplaint(c: any): Complaint {
     priorityScore: c.priorityScore || 70,
     priorityFactors: c.priorityFactors || ['Standard Citizen Grievance SLA'],
     status: statusVal,
-    createdAt: c.createdAt || new Date().toISOString(),
-    updatedAt: c.updatedAt || new Date().toISOString(),
+    createdAt: toCanonicalIso(c.createdAt),
+    updatedAt: toCanonicalIso(c.updatedAt || c.createdAt),
     assignedOfficer: c.assignedOfficer || c.routing?.assignedOfficerName || '',
     adminNotes: c.adminNotes || c.priorityReason || '',
     escalated: Boolean(c.escalated || c.escalationLevel > 0 || c.escalationRisk === 'HIGH' || c.escalationRisk === 'CRITICAL'),
@@ -362,7 +363,7 @@ export async function fetchComplaintTimeline(id: string): Promise<TimelineEvent[
           step: index + 1,
           title: cleanTitle,
           description: e.description,
-          timestamp: e.createdAt ? new Date(e.createdAt).toLocaleString() : 'Pending',
+          timestamp: (e.createdAt || e.timestamp) ? toCanonicalIso(e.createdAt || e.timestamp) : 'Pending',
           completed: !isLast,
           current: isLast,
           officerName: e.officerName || e.metadata?.assignedOfficerName || (e.actor?.type === 'officer' ? e.actor?.name : undefined),

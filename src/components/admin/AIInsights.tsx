@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import type { Complaint } from '../../types';
+import { parseSafeDate } from '../../utils/dateUtils';
 import {
   PieChart,
   Pie,
@@ -75,12 +76,15 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
   // 3. Complaint Trends over time
   const trendData = useMemo(() => {
     const datesMap: Record<string, { date: string; count: number; highPriority: number }> = {};
-    const sorted = [...complaints].sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-    );
+    const sorted = [...complaints].sort((a, b) => {
+      const ta = parseSafeDate(a.createdAt)?.getTime() || 0;
+      const tb = parseSafeDate(b.createdAt)?.getTime() || 0;
+      return ta - tb;
+    });
 
     sorted.forEach((c) => {
-      const d = new Date(c.createdAt).toLocaleDateString('en-US', {
+      const dateObj = parseSafeDate(c.createdAt) || new Date(c.createdAt);
+      const d = dateObj.toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
       });

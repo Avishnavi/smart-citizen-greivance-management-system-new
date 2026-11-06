@@ -4,6 +4,7 @@ import { useComplaints } from '../context/ComplaintContext';
 import { ComplaintCard } from '../components/history/ComplaintCard';
 import { EmptyState } from '../components/common/EmptyState';
 import type { ComplaintStatus } from '../types';
+import { parseSafeDate } from '../utils/dateUtils';
 import {
   Search,
   PlusCircle,
@@ -56,7 +57,7 @@ export const ComplaintHistory: React.FC = () => {
           const pOrder = { High: 3, Medium: 2, Low: 1 };
           return (pOrder[b.priority] || 0) - (pOrder[a.priority] || 0);
         }
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        return (parseSafeDate(b.createdAt)?.getTime() || 0) - (parseSafeDate(a.createdAt)?.getTime() || 0);
       });
   }, [complaints, statusFilter, categoryFilter, searchQuery, sortBy]);
 

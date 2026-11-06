@@ -3,6 +3,7 @@ import type { Complaint } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { CategoryIcon } from '../common/CategoryIcon';
+import { formatDateTime, formatDate } from '../../utils/dateUtils';
 import {
   MapPin,
   Building,
@@ -41,17 +42,7 @@ export const ComplaintDetailsCard: React.FC<ComplaintDetailsCardProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Submitted on{' '}
-              {complaint.createdAt
-                ? `${new Date(complaint.createdAt).toLocaleDateString([], {
-                    month: 'short',
-                    day: 'numeric',
-                    year: 'numeric',
-                  })} at ${new Date(complaint.createdAt).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}`
-                : 'Recently'}
+              Submitted on {formatDateTime(complaint.createdAt)}
             </p>
           </div>
         </div>
@@ -214,7 +205,7 @@ export const ComplaintDetailsCard: React.FC<ComplaintDetailsCardProps> = ({
           </p>
           <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-emerald-800 pt-1">
             <span>Verified by: <strong>{complaint.resolution.officerName}</strong></span>
-            <span>Closed on: <strong>{new Date(complaint.resolution.resolvedAt).toLocaleDateString()}</strong></span>
+            <span>Closed on: <strong>{formatDate(complaint.resolution.resolvedAt)}</strong></span>
           </div>
         </div>
       )}

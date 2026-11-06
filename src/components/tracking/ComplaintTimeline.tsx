@@ -8,6 +8,8 @@ import {
   Check
 } from 'lucide-react';
 
+import { formatTimelineTimestamp } from '../../utils/dateUtils';
+
 interface ComplaintTimelineProps {
   timeline: TimelineEvent[];
   onAddFeedbackClick?: () => void;
@@ -29,19 +31,7 @@ export const ComplaintTimeline: React.FC<ComplaintTimelineProps> = ({
     return <Circle className="w-3.5 h-3.5 text-slate-300 fill-current" />;
   };
 
-  const formatTimestamp = (timestamp: string) => {
-    if (!timestamp || timestamp === 'Pending') return 'Pending';
-    try {
-      const date = new Date(timestamp);
-      return (
-        date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) +
-        ' • ' +
-        date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      );
-    } catch {
-      return timestamp;
-    }
-  };
+  const formatTimestamp = (timestamp: string) => formatTimelineTimestamp(timestamp);
 
   const visibleTimeline = (timeline || []).filter((item) => {
     const t = (item.title || '').toLowerCase();
