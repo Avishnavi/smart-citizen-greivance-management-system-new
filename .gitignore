@@ -41,3 +41,6 @@ server/.env.*.local
 *.njsproj
 *.sln
 *.sw?
+
+# Legacy Nested Project Directory
+Smart-citizen-greivance-management-system-main/
