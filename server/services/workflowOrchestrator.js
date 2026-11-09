@@ -33,8 +33,10 @@ const recurringIssueService = require('./recurringIssueService');
 
 async function logEvent(complaintId, eventType, description, metadata = {}, actor = {}) {
   try {
+    const taskId = metadata?.taskId || null;
     await WorkflowEvent.create({
       complaintId,
+      taskId,
       eventType,
       description,
       metadata,
@@ -70,9 +72,18 @@ async function updateComplaintStatus(complaintId, fromStatus, toStatus, updateDa
 
 // ─── Notification helper ──────────────────────────────────────────────────────
 
-async function notifyCitizen(citizenId, complaintId, title, message, type = 'status_change') {
+async function notifyCitizen(citizenId, complaintId, title, message, type = 'status_change', extra = {}) {
   try {
-    await Notification.create({ citizenId, complaintId, title, message, type });
+    await Notification.create({
+      citizenId,
+      complaintId,
+      title,
+      message,
+      type,
+      userId: extra.userId || null,
+      recipientRole: extra.recipientRole || 'citizen',
+      taskId: extra.taskId || null,
+    });
   } catch (err) {
     console.error('Failed to create notification:', err.message);
   }
@@ -99,57 +110,107 @@ async function runAnalysisPipeline(complaintId) {
     await updateComplaintStatus(complaintId, 'SUBMITTED', 'UNDER_REVIEW');
     await logEvent(complaintId, 'LLM_ANALYSIS_STARTED', 'Internal automated analysis initiated.', { internal: true });
 
-    // ── Step 2: LLM Analysis (stub) ──────────────────────────────────────────
+    // ── Step 2: LLM Analysis (M2) ──────────────────────────────────────────
     let llmResult;
     try {
-      llmResult = await llmService.analyzeComplaint(complaint.originalText, complaint.imageUrls);
-      complaint.llmAnalysis = {
+      llmResult = await llmService.analyzeComplaint(complaint.description || complaint.originalText, complaint.imageUrls);
+      const llmFields = {
         status: llmResult.status,
         provider: llmResult.provider,
+        method: llmResult.method,
         processedAt: new Date(),
       };
+      if (llmResult.result) {
+        Object.assign(llmFields, {
+          summary: llmResult.result.summary,
+          issueType: llmResult.result.issueType,
+          affectedService: llmResult.result.affectedService,
+          requestedAction: llmResult.result.requestedAction,
+          extractedLocation: llmResult.result.extractedLocation,
+          urgencyIndicators: llmResult.result.urgencyIndicators,
+          extractedEntities: llmResult.result.extractedEntities,
+          contextualDetails: llmResult.result.contextualDetails,
+          confidence: llmResult.result.confidence,
+        });
+      }
+
+      await Complaint.findOneAndUpdate({ complaintId }, { llmAnalysis: llmFields });
+
       await logEvent(
         complaintId,
-        llmResult.status === 'completed' ? 'LLM_ANALYSIS_COMPLETED' : 'LLM_ANALYSIS_FAILED',
-        llmResult.status === 'completed'
-          ? 'LLM analysis completed successfully.'
-          : `LLM service: ${llmResult.message}`,
-        { llmStatus: llmResult.status, provider: llmResult.provider, internal: true }
+        'LLM_ANALYSIS_COMPLETED',
+        llmResult.method === 'llm'
+          ? 'LLM semantic analysis completed successfully.'
+          : 'Processed via transparent civic understanding fallback parser.',
+        { llmStatus: llmResult.status, method: llmResult.method, provider: llmResult.provider, internal: true }
       );
     } catch (err) {
       console.error(`[Pipeline] LLM analysis error for ${complaintId}:`, err.message);
+      await Complaint.findOneAndUpdate(
+        { complaintId },
+        { 'llmAnalysis.status': 'failed', 'llmAnalysis.error': err.message }
+      );
+      await logEvent(
+        complaintId,
+        'LLM_ANALYSIS_FAILED',
+        `LLM analysis module failed: ${err.message}. Downstream processing continuing with raw text.`,
+        { error: err.message, internal: true }
+      );
     }
 
-    // ── Step 3: Categorization ────────────────────────────────────────────────
+    // ── Step 3: Categorization (M3) ─────────────────────────────────────────
     let category = complaint.category || 'Other';
-    let department = null;
+    let subcategory = '';
+    let catResult = null;
     try {
-      const catResult = await categorizationService.categorizeComplaint(
-        complaint.originalText,
+      catResult = await categorizationService.categorizeComplaint(
+        complaint.description || complaint.originalText,
         complaint.imageUrls
       );
       category = catResult.category;
-      department = catResult.department;
+      subcategory = catResult.subcategory;
 
       await Complaint.findOneAndUpdate(
         { complaintId },
         {
           category,
-          categorizationStatus: 'completed',
+          subcategory,
+          categorizationStatus: catResult.isAmbiguous ? 'manual' : 'completed',
           'llmAnalysis.summary': catResult.aiSummary,
         }
       );
       await logEvent(
         complaintId,
         'CATEGORY_ASSIGNED',
-        `Category: "${category}", Department: "${department}" (${catResult.method}, ${Math.round(catResult.confidence * 100)}% confidence)`,
-        { category, department, confidence: catResult.confidence, method: catResult.method, internal: true }
+        `Category: "${category}" (${subcategory}) [Confidence: ${catResult.confidence}]. ${catResult.isAmbiguous ? 'Ambiguous: Flagged for Central Admin review.' : ''}`,
+        {
+          category,
+          subcategory,
+          confidence: catResult.confidence,
+          confidenceType: catResult.confidenceType,
+          isAmbiguous: catResult.isAmbiguous,
+          explanation: catResult.explanation,
+          method: catResult.method,
+          internal: true,
+        }
       );
     } catch (err) {
       console.error(`[Pipeline] Categorization error for ${complaintId}:`, err.message);
+      category = 'Other';
+      subcategory = 'Unspecified Civic Grievance';
+      await Complaint.findOneAndUpdate(
+        { complaintId },
+        { category: 'Other', subcategory, categorizationStatus: 'failed' }
+      );
+      await logEvent(
+        complaintId,
+        'CATEGORY_ASSIGNMENT_FAILED',
+        `Categorization failed: ${err.message}. Set to "Other" pending Central Admin review.`,
+        { error: err.message, internal: true }
+      );
     }
 
-    // ── Step 4: Duplicate Detection ───────────────────────────────────────────
+    // ── Step 4: Duplicate Detection (M4) ────────────────────────────────────
     try {
       const recentComplaints = await Complaint.find({
         complaintId: { $ne: complaintId },
@@ -158,42 +219,56 @@ async function runAnalysisPipeline(complaintId) {
       }).limit(50);
 
       const dupResult = await duplicateDetectionService.checkDuplicate(
-        complaint.originalText,
+        complaint.description || complaint.originalText,
         complaint.location,
-        recentComplaints
+        recentComplaints,
+        { category, subcategory, currentComplaintId: complaintId }
       );
 
       await Complaint.findOneAndUpdate(
         { complaintId },
         {
           'duplicateAnalysis.isDuplicate': dupResult.isDuplicate,
+          'duplicateAnalysis.duplicateLevel': dupResult.duplicateLevel,
           'duplicateAnalysis.status': 'checked',
           'duplicateAnalysis.similarityScore': dupResult.similarityScore || 0,
           'duplicateAnalysis.distanceMeters': dupResult.distanceMeters,
-          ...(dupResult.similarComplaintId && {
-            'duplicateAnalysis.duplicateComplaintIds': [dupResult.similarComplaintId],
-          }),
+          'duplicateAnalysis.reason': dupResult.reason,
+          'duplicateAnalysis.duplicateComplaintIds': dupResult.similarComplaintId
+            ? [dupResult.similarComplaintId]
+            : [],
         }
       );
       await logEvent(
         complaintId,
         'DUPLICATE_CHECK_COMPLETED',
         dupResult.isDuplicate
-          ? `Potential duplicate of ${dupResult.similarComplaintId} (${Math.round((dupResult.similarityScore || 0) * 100)}% similarity, ${dupResult.distanceMeters}m away)`
-          : 'No duplicate found.',
+          ? `Potential duplicate of ${dupResult.similarComplaintId} (${Math.round((dupResult.similarityScore || 0) * 100)}% lexical match, ${dupResult.distanceMeters}m away). Forwarded to Admin.`
+          : (dupResult.duplicateLevel === 'related'
+            ? `Related issue ${dupResult.similarComplaintId} noted in vicinity. Retained as distinct complaint.`
+            : 'No duplicate found within threshold radius.'),
         { ...dupResult, method: dupResult.method, internal: true }
       );
     } catch (err) {
       console.error(`[Pipeline] Duplicate detection error for ${complaintId}:`, err.message);
+      await Complaint.findOneAndUpdate(
+        { complaintId },
+        { 'duplicateAnalysis.status': 'failed', 'duplicateAnalysis.isDuplicate': false }
+      );
+      await logEvent(
+        complaintId,
+        'DUPLICATE_CHECK_FAILED',
+        `Duplicate check module failed: ${err.message}. Complaint retained as distinct.`,
+        { error: err.message, internal: true }
+      );
     }
 
-    // ── Step 5: Priority Prediction ───────────────────────────────────────────
+    // ── Step 5: Priority Prediction (M5) ────────────────────────────────────
     let priorityResult;
     try {
-      const freshComplaint = await Complaint.findOne({ complaintId });
       priorityResult = await priorityService.predictPriority(
-        freshComplaint?.category || category,
-        complaint.originalText,
+        category,
+        complaint.description || complaint.originalText,
         complaint.location,
         complaint.hasVoice || (complaint.imageUrls?.length > 0)
       );
@@ -204,60 +279,90 @@ async function runAnalysisPipeline(complaintId) {
           priority: priorityResult.priority,
           priorityScore: priorityResult.score,
           priorityFactors: priorityResult.factors,
-          priorityReason: priorityResult.factors.join('; '),
+          priorityReason: priorityResult.priorityReason,
           priorityStatus: 'completed',
         }
       );
       await logEvent(
         complaintId,
         'PRIORITY_PREDICTED',
-        `Priority: ${priorityResult.priority} (score: ${priorityResult.score}). Factors: ${priorityResult.factors.join(', ')}`,
+        `Priority: ${priorityResult.priority} (Score: ${priorityResult.score}/100, SLA: ${priorityResult.slaHours}h). ${priorityResult.needsAdminReview ? '[Admin Review Recommended]' : ''}`,
         { ...priorityResult, internal: true }
       );
     } catch (err) {
       console.error(`[Pipeline] Priority prediction error for ${complaintId}:`, err.message);
+      await Complaint.findOneAndUpdate(
+        { complaintId },
+        { priority: 'MEDIUM', priorityStatus: 'failed', priorityReason: 'Defaulted to MEDIUM due to priority module error.' }
+      );
+      await logEvent(
+        complaintId,
+        'PRIORITY_PREDICTION_FAILED',
+        `Priority prediction failed: ${err.message}. Defaulted to MEDIUM.`,
+        { error: err.message, internal: true }
+      );
     }
 
-    // ── Step 6: Department Routing ────────────────────────────────────────────
+    // ── Step 6: Department Recommendation (M6) ──────────────────────────────
     try {
-      const routingResult = await routingService.routeComplaint(category);
+      const recResult = await routingService.recommendDepartments(
+        category,
+        complaint.description || complaint.originalText
+      );
+
       const updateFields = {
-        'routing.departmentName': routingResult.departmentName,
-        'routing.routingReason': routingResult.routingReason,
+        'routing.departmentName': recResult.primaryDepartment.departmentName,
+        'routing.departmentId': recResult.primaryDepartment.departmentId,
+        'routing.routingReason': recResult.primaryDepartment.reason,
+        'departments.primary': recResult.primaryDepartment.departmentName ? {
+          departmentId: recResult.primaryDepartment.departmentId,
+          departmentName: recResult.primaryDepartment.departmentName,
+          reason: recResult.primaryDepartment.reason,
+        } : null,
+        'departments.supporting': recResult.supportingDepartments.map((s) => ({
+          departmentId: s.departmentId,
+          departmentName: s.departmentName,
+          reason: s.reason,
+        })),
+        'adminApproval.status': 'pending',
       };
-      if (routingResult.departmentId) {
-        updateFields['routing.departmentId'] = routingResult.departmentId;
-      }
-      if (routingResult.assignedOfficerId) {
-        updateFields['routing.assignedOfficerId'] = routingResult.assignedOfficerId;
-        updateFields['routing.assignedOfficerName'] = routingResult.assignedOfficerName;
-        updateFields['routing.routedAt'] = new Date();
-      }
+
       await Complaint.findOneAndUpdate({ complaintId }, updateFields);
 
       await logEvent(
         complaintId,
-        'DEPARTMENT_ROUTED',
-        `Assigned to ${routingResult.departmentName}. Officer: ${routingResult.assignedOfficerName}.`,
-        { ...routingResult },
-        { type: 'system', id: 'dispatch', name: 'Municipal Dispatch' }
+        'AI_ROUTING_RECOMMENDED',
+        recResult.recommendationSummary,
+        { ...recResult, internal: true },
+        { type: 'ai', id: 'ai_triage', name: 'AI Routing Engine' }
+      );
+
+      // Transition to Central Admin review queue (does not bypass approval)
+      await updateComplaintStatus(
+        complaintId,
+        'UNDER_ANALYSIS',
+        'AWAITING_ADMIN_REVIEW'
+      );
+    } catch (err) {
+      console.error(`[Pipeline] Routing recommendation error for ${complaintId}:`, err.message);
+      await Complaint.findOneAndUpdate(
+        { complaintId },
+        {
+          'routing.routingReason': `Routing error: ${err.message}. Awaiting manual Central Admin routing.`,
+          'adminApproval.status': 'pending',
+        }
+      );
+      await logEvent(
+        complaintId,
+        'AI_ROUTING_FAILED',
+        `Department recommendation failed: ${err.message}. Forwarded to Central Admin for manual assignment.`,
+        { error: err.message, internal: true }
       );
       await updateComplaintStatus(
         complaintId,
-        'UNDER_REVIEW',
-        routingResult.assignedOfficerId ? 'ASSIGNED' : 'ROUTED'
+        'UNDER_ANALYSIS',
+        'AWAITING_ADMIN_REVIEW'
       );
-
-      // Notify citizen
-      await notifyCitizen(
-        complaint.citizenId,
-        complaintId,
-        `Complaint ${complaintId} Assigned`,
-        `Your ${category} complaint has been routed to ${routingResult.departmentName}. Officer: ${routingResult.assignedOfficerName}.`,
-        'assigned'
-      );
-    } catch (err) {
-      console.error(`[Pipeline] Routing error for ${complaintId}:`, err.message);
     }
 
     // ── Step 7: Escalation Assessment ────────────────────────────────────────

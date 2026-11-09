@@ -4,6 +4,7 @@ import { useComplaints } from '../context/ComplaintContext';
 import { ComplaintTimeline } from '../components/tracking/ComplaintTimeline';
 import { ComplaintDetailsCard } from '../components/tracking/ComplaintDetailsCard';
 import { CitizenFeedbackModal } from '../components/tracking/CitizenFeedbackModal';
+import { CitizenDepartmentChat } from '../components/chat/CitizenDepartmentChat';
 import { fetchComplaintById } from '../services/complaintService';
 import type { Complaint, CitizenFeedback } from '../types';
 import { Search } from 'lucide-react';
@@ -248,9 +249,10 @@ export const TrackComplaint: React.FC = () => {
       {/* Main Track View */}
       {selectedComplaint && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-          {/* Primary Left Column: Complaint Details Card */}
+          {/* Primary Left Column: Complaint Details Card & Department Chat */}
           <div className="lg:col-span-2 space-y-6">
             <ComplaintDetailsCard complaint={selectedComplaint} />
+            <CitizenDepartmentChat complaintId={selectedComplaint.id} />
           </div>
 
           {/* Right Column: Workflow Timeline Progress */}

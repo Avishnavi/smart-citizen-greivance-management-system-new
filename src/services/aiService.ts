@@ -89,12 +89,11 @@ export async function classifyComplaint(
   text: string,
   _imageUrls?: string[]
 ): Promise<AIClassificationResult> {
-  await delay(800); // Simulate model inference
+  await delay(400); // Simulate model inference
 
   const lower = text.toLowerCase();
 
   let category: ComplaintCategory = 'Other';
-  let confidence = 0.88;
   const keywords: string[] = [];
 
   if (
@@ -103,10 +102,11 @@ export async function classifyComplaint(
     lower.includes('asphalt') ||
     lower.includes('crater') ||
     lower.includes('tar') ||
-    lower.includes('speed breaker')
+    lower.includes('speed breaker') ||
+    lower.includes('குழி') ||
+    lower.includes('salai')
   ) {
     category = 'Pothole';
-    confidence = 0.96;
     keywords.push('road damage', 'pothole', 'surface depression', 'traffic hazard');
   } else if (
     lower.includes('sewage') ||
@@ -115,10 +115,11 @@ export async function classifyComplaint(
     lower.includes('manhole') ||
     lower.includes('overflow') ||
     lower.includes('clog') ||
-    lower.includes('foul')
+    lower.includes('foul') ||
+    lower.includes('சாக்கடை') ||
+    lower.includes('saakadai')
   ) {
     category = 'Drainage';
-    confidence = 0.93;
     keywords.push('sewage overflow', 'drainage blockage', 'sanitation', 'manhole');
   } else if (
     lower.includes('light') ||
@@ -126,10 +127,11 @@ export async function classifyComplaint(
     lower.includes('dark') ||
     lower.includes('electricity') ||
     lower.includes('wire') ||
-    lower.includes('pole')
+    lower.includes('pole') ||
+    lower.includes('விளக்கு') ||
+    lower.includes('eriyala')
   ) {
     category = 'Streetlight';
-    confidence = 0.95;
     keywords.push('public lighting', 'dark street', 'pole fixture', 'pedestrian safety');
   } else if (
     lower.includes('water') ||
@@ -137,10 +139,11 @@ export async function classifyComplaint(
     lower.includes('leak') ||
     lower.includes('drinking water') ||
     lower.includes('tap') ||
-    lower.includes('contamination')
+    lower.includes('contamination') ||
+    lower.includes('தண்ணீர்') ||
+    lower.includes('thanni')
   ) {
     category = 'Water Supply';
-    confidence = 0.91;
     keywords.push('water supply', 'pipe leakage', 'distribution loss', 'scarcity');
   } else if (
     lower.includes('garbage') ||
@@ -149,10 +152,11 @@ export async function classifyComplaint(
     lower.includes('bin') ||
     lower.includes('dump') ||
     lower.includes('plastic') ||
-    lower.includes('debris')
+    lower.includes('debris') ||
+    lower.includes('குப்பை') ||
+    lower.includes('kuppai')
   ) {
     category = 'Garbage';
-    confidence = 0.94;
     keywords.push('solid waste', 'bin overflow', 'littering', 'civic cleanliness');
   } else if (
     lower.includes('traffic') ||
@@ -160,10 +164,10 @@ export async function classifyComplaint(
     lower.includes('parking') ||
     lower.includes('jam') ||
     lower.includes('congestion') ||
-    lower.includes('accident')
+    lower.includes('accident') ||
+    lower.includes('நெரிசல்')
   ) {
     category = 'Traffic';
-    confidence = 0.89;
     keywords.push('traffic management', 'signal glitch', 'congestion', 'road safety');
   } else if (
     lower.includes('dog') ||
@@ -171,31 +175,38 @@ export async function classifyComplaint(
     lower.includes('cow') ||
     lower.includes('animal') ||
     lower.includes('bite') ||
-    lower.includes('stray')
+    lower.includes('stray') ||
+    lower.includes('நாய்') ||
+    lower.includes('naai')
   ) {
     category = 'Stray Animals';
-    confidence = 0.92;
     keywords.push('stray animal control', 'public safety', 'animal welfare');
   } else if (
     lower.includes('tree') ||
     lower.includes('branch') ||
     lower.includes('fallen') ||
     lower.includes('park') ||
-    lower.includes('greenery')
+    lower.includes('greenery') ||
+    lower.includes('மரம்') ||
+    lower.includes('maram')
   ) {
     category = 'Tree Fall';
-    confidence = 0.95;
     keywords.push('tree branch clearance', 'horticulture', 'storm debris');
   } else if (
     lower.includes('building') ||
     lower.includes('construction') ||
     lower.includes('encroachment') ||
-    lower.includes('illegal')
+    lower.includes('illegal') ||
+    lower.includes('ஆக்கிரமிப்பு')
   ) {
     category = 'Illegal Construction';
-    confidence = 0.87;
     keywords.push('unauthorized construction', 'encroachment', 'zoning violation');
   }
+
+  // Calculate dynamic confidence based on signal match count
+  const confidence = category !== 'Other'
+    ? parseFloat(Math.min(0.95, Math.max(0.65, 0.65 + (keywords.length * 0.07))).toFixed(2))
+    : 0.35;
 
   const department = CATEGORY_DEPARTMENT_MAP[category];
 
@@ -356,6 +367,36 @@ export async function runFullAIAnalysis(
 ): Promise<AIAnalysisResult> {
   const startTime = Date.now();
 
+  // Attempt backend API preview if available
+  try {
+    const response = await fetch('/api/ai/preview-analysis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        description,
+        location,
+        imageUrls,
+        hasVoice: _hasVoice,
+      }),
+      signal: AbortSignal.timeout(2000),
+    });
+
+    if (response.ok) {
+      const json = await response.json();
+      if (json?.success && json?.data) {
+        return {
+          classification: json.data.classification,
+          priority: json.data.priority,
+          duplicate: json.data.duplicate,
+          processingTimeMs: json.data.processingTimeMs || (Date.now() - startTime),
+        };
+      }
+    }
+  } catch (_) {
+    // Gracefully proceed with client-side fallback
+  }
+
+  // Client-side fallback
   const [classification, duplicate] = await Promise.all([
     classifyComplaint(description, imageUrls),
     checkDuplicateComplaint(description, location, existingComplaints)

@@ -5,7 +5,8 @@ import { useComplaints } from '../../context/ComplaintContext';
 import {
   getCurrentBrowserLocation,
   reverseGeocodeCoordinates,
-  searchLandmarkSuggestions
+  searchLocations,
+  KNOWN_SMART_CITY_LANDMARKS
 } from '../../services/locationService';
 import type { LocationCoords } from '../../types';
 import {
@@ -14,7 +15,10 @@ import {
   Search,
   ArrowRight,
   ArrowLeft,
-  RefreshCw
+  RefreshCw,
+  X,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 
 const customMarkerIcon = new L.Icon({
@@ -42,9 +46,10 @@ function MapEventsHandler({
 
 function MapCenterController({ center }: { center: [number, number] }) {
   const map = useMap();
+  const [lat, lng] = center;
   useEffect(() => {
-    map.setView(center, map.getZoom(), { animate: true });
-  }, [center, map]);
+    map.flyTo([lat, lng], 16, { animate: true, duration: 0.8 });
+  }, [lat, lng, map]);
   return null;
 }
 
@@ -60,48 +65,111 @@ export const Step2LocationPicker: React.FC<Step2LocationPickerProps> = ({
   const { draft, updateDraft } = useComplaints();
   const [coords, setCoords] = useState<LocationCoords>(draft.location);
   const [isDetectingGPS, setIsDetectingGPS] = useState(false);
+  const [isReverseGeocoding, setIsReverseGeocoding] = useState(false);
+  const [gpsNotice, setGpsNotice] = useState<string | null>(null);
+
+  // Search state
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<LocationCoords[]>(KNOWN_SMART_CITY_LANDMARKS);
+  const [isSearching, setIsSearching] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
 
   const center: [number, number] = useMemo(
     () => [coords.latitude, coords.longitude],
     [coords.latitude, coords.longitude]
   );
 
-  const suggestions = useMemo(
-    () => searchLandmarkSuggestions(searchQuery),
-    [searchQuery]
-  );
+  // Debounced search for locations
+  useEffect(() => {
+    if (!searchQuery || searchQuery.trim().length < 2) {
+      setSearchResults(KNOWN_SMART_CITY_LANDMARKS);
+      setHasSearched(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const results = await searchLocations(searchQuery);
+        setSearchResults(results);
+        setHasSearched(true);
+      } catch (err) {
+        console.error('Failed to search locations:', err);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const handleSearchSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!searchQuery || searchQuery.trim().length < 2) return;
+
+    setIsSearching(true);
+    setShowSuggestions(true);
+    try {
+      const results = await searchLocations(searchQuery);
+      setSearchResults(results);
+      setHasSearched(true);
+    } catch (err) {
+      console.error('Search submit error:', err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
 
   const handleGPSDetect = async () => {
     setIsDetectingGPS(true);
+    setGpsNotice(null);
     try {
       const gpsLoc = await getCurrentBrowserLocation();
-      const detailed = await reverseGeocodeCoordinates(gpsLoc.latitude, gpsLoc.longitude);
-      setCoords(detailed);
-      updateDraft({ location: detailed });
+      setCoords(gpsLoc);
+      updateDraft({ location: gpsLoc });
+      setSearchQuery(gpsLoc.landmark || gpsLoc.address);
+      setGpsNotice('Current location detected successfully.');
     } catch (e) {
       console.error('GPS Detection failed:', e);
+      setGpsNotice('Could not detect current location. You can search or click on the map manually.');
     } finally {
       setIsDetectingGPS(false);
+      setTimeout(() => setGpsNotice(null), 5000);
     }
   };
 
   const handleMapPinMove = async (lat: number, lng: number) => {
-    const detailed = await reverseGeocodeCoordinates(lat, lng);
-    setCoords(detailed);
-    updateDraft({ location: detailed });
+    setIsReverseGeocoding(true);
+    try {
+      const detailed = await reverseGeocodeCoordinates(lat, lng);
+      setCoords(detailed);
+      updateDraft({ location: detailed });
+      setSearchQuery(detailed.landmark || detailed.address);
+    } catch (e) {
+      console.error('Reverse geocode error:', e);
+    } finally {
+      setIsReverseGeocoding(false);
+    }
   };
 
-  const handleSelectLandmark = (lm: LocationCoords) => {
-    setCoords(lm);
-    updateDraft({ location: lm });
-    setSearchQuery(lm.landmark || lm.address);
+  const handleSelectLocation = (loc: LocationCoords) => {
+    setCoords(loc);
+    updateDraft({ location: loc });
+    setSearchQuery(loc.landmark || loc.address);
+    setShowSuggestions(false);
+  };
+
+  const handleClearSearch = () => {
+    setSearchQuery('');
+    setSearchResults(KNOWN_SMART_CITY_LANDMARKS);
+    setHasSearched(false);
     setShowSuggestions(false);
   };
 
   return (
     <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
+      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-slate-100">
         <div>
           <div className="flex items-center gap-2">
@@ -113,10 +181,11 @@ export const Step2LocationPicker: React.FC<Step2LocationPickerProps> = ({
             </h2>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Use GPS or click/drag the map pin to mark the exact civic problem site.
+            Search any address, enter a landmark, or click & drag the pin on the map.
           </p>
         </div>
 
+        {/* Independent Current Location button */}
         <button
           type="button"
           onClick={handleGPSDetect}
@@ -132,48 +201,107 @@ export const Step2LocationPicker: React.FC<Step2LocationPickerProps> = ({
         </button>
       </div>
 
-      <div className="relative">
-        <div className="relative flex items-center">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setShowSuggestions(true);
-            }}
-            onFocus={() => setShowSuggestions(true)}
-            placeholder="Search landmark (e.g. Anna Nagar Roundtana, Usman Road, Adyar Bus Depot)..."
-            className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs md:text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
-          />
+      {gpsNotice && (
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs text-emerald-800 flex items-center gap-2 animate-in fade-in">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+          <span>{gpsNotice}</span>
         </div>
+      )}
 
-        {showSuggestions && suggestions.length > 0 && (
+      {/* Search Input & Results Dropdown */}
+      <div className="relative">
+        <form onSubmit={handleSearchSubmit} className="relative flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setShowSuggestions(true);
+              }}
+              onFocus={() => setShowSuggestions(true)}
+              placeholder="Search any place or address (e.g. Gandhi Road, Vellore or Anna Nagar)..."
+              className="w-full pl-10 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs md:text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition shadow-inner"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={handleClearSearch}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded-full"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+
+          <button
+            type="submit"
+            disabled={isSearching || !searchQuery.trim()}
+            className="px-5 py-3 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white font-bold text-xs md:text-sm rounded-2xl shadow-sm transition flex items-center gap-1.5 flex-shrink-0"
+          >
+            {isSearching ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <Search className="w-4 h-4" />
+            )}
+            <span>{isSearching ? 'Searching...' : 'Search'}</span>
+          </button>
+        </form>
+
+        {/* Suggestions Dropdown */}
+        {showSuggestions && (
           <>
             <div className="fixed inset-0 z-20" onClick={() => setShowSuggestions(false)} />
-            <div className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-2xl shadow-xl z-30 max-h-48 overflow-y-auto divide-y divide-slate-100">
-              {suggestions.map((item, idx) => (
-                <div
-                  key={idx}
-                  onClick={() => handleSelectLandmark(item)}
-                  className="p-3 hover:bg-sky-50 cursor-pointer transition flex items-center justify-between text-xs"
-                >
-                  <div>
-                    <span className="font-bold text-slate-800 block">
-                      {item.landmark || item.address}
-                    </span>
-                    <span className="text-slate-500 text-[11px]">
-                      {item.ward} • {item.zone}
+            <div className="absolute left-0 right-0 mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl z-30 max-h-64 overflow-y-auto divide-y divide-slate-100 animate-in fade-in zoom-in-95 duration-100">
+              {isSearching ? (
+                <div className="p-4 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin text-sky-600" />
+                  <span>Searching locations across maps...</span>
+                </div>
+              ) : searchResults.length > 0 ? (
+                searchResults.map((item, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => handleSelectLocation(item)}
+                    className="p-3.5 hover:bg-sky-50 cursor-pointer transition flex items-center justify-between text-xs group"
+                  >
+                    <div className="space-y-0.5 pr-2">
+                      <div className="flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-sky-600 flex-shrink-0" />
+                        <span className="font-extrabold text-slate-900 group-hover:text-sky-700">
+                          {item.landmark || item.address.split(',')[0]}
+                        </span>
+                      </div>
+                      <p className="text-slate-500 text-[11px] line-clamp-1 pl-5">
+                        {item.address}
+                      </p>
+                      {(item.ward || item.zone) && (
+                        <p className="text-[10px] text-slate-400 pl-5">
+                          {item.ward && `Ward: ${item.ward}`} {item.zone && `• Zone: ${item.zone}`}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-sky-600 font-bold flex-shrink-0 group-hover:translate-x-0.5 transition">
+                      Select →
                     </span>
                   </div>
-                  <span className="text-[11px] text-sky-600 font-semibold">Select →</span>
+                ))
+              ) : hasSearched ? (
+                <div className="p-4 text-center text-xs text-slate-500 space-y-1">
+                  <AlertCircle className="w-5 h-5 text-amber-500 mx-auto" />
+                  <p className="font-semibold text-slate-700">No matching location found</p>
+                  <p className="text-[11px] text-slate-400">
+                    Try entering a street name, nearby landmark, or click on the map to pinpoint.
+                  </p>
                 </div>
-              ))}
+              ) : null}
             </div>
           </>
         )}
       </div>
 
+      {/* Map View */}
       <div className="relative rounded-2xl overflow-hidden border border-slate-200 h-80 sm:h-96 shadow-inner">
         <MapContainer
           center={center}
@@ -201,32 +329,41 @@ export const Step2LocationPicker: React.FC<Step2LocationPickerProps> = ({
           />
         </MapContainer>
 
-        <div className="absolute bottom-3 left-3 right-3 sm:right-auto z-20 bg-white/95 backdrop-blur-md p-3 rounded-2xl border border-slate-200 shadow-lg text-xs space-y-1 max-w-sm">
+        {/* Selected location overlay badge */}
+        <div className="absolute bottom-3 left-3 right-3 sm:right-auto z-20 bg-white/95 backdrop-blur-md p-3.5 rounded-2xl border border-slate-200 shadow-lg text-xs space-y-1 max-w-sm">
           <div className="flex items-center gap-1.5 text-sky-900 font-bold">
             <MapPin className="w-4 h-4 text-sky-600 flex-shrink-0" />
             <span className="truncate">{coords.address}</span>
+            {isReverseGeocoding && (
+              <RefreshCw className="w-3 h-3 animate-spin text-sky-500 ml-auto flex-shrink-0" />
+            )}
           </div>
           <div className="flex items-center gap-2 text-[11px] text-slate-500">
             <span className="font-mono">{coords.latitude.toFixed(4)}° N, {coords.longitude.toFixed(4)}° E</span>
-            <span>•</span>
-            <span>{coords.ward}</span>
+            {coords.ward && (
+              <>
+                <span>•</span>
+                <span>{coords.ward}</span>
+              </>
+            )}
           </div>
         </div>
       </div>
 
+      {/* Location Details Info Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs">
         <div>
           <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-            Street Address
+            Selected Address
           </span>
-          <p className="mt-0.5 font-bold text-slate-800">{coords.address}</p>
+          <p className="mt-0.5 font-bold text-slate-800 line-clamp-2">{coords.address}</p>
         </div>
         <div>
           <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-            Ward & Zone
+            Administrative Division
           </span>
           <p className="mt-0.5 font-bold text-slate-800">
-            {coords.ward || 'Ward 102'} ({coords.zone || 'Zone 8'})
+            {coords.ward || 'Urban Division'} {coords.zone ? `(${coords.zone})` : ''}
           </p>
         </div>
         <div>
@@ -239,6 +376,7 @@ export const Step2LocationPicker: React.FC<Step2LocationPickerProps> = ({
         </div>
       </div>
 
+      {/* Navigation Buttons */}
       <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
         <button
           type="button"
@@ -257,7 +395,7 @@ export const Step2LocationPicker: React.FC<Step2LocationPickerProps> = ({
           }}
           className="px-6 py-3 bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs md:text-sm rounded-2xl flex items-center gap-2 shadow-md shadow-sky-600/20 transition hover:scale-[1.01] active:scale-98"
         >
-          <span>Next: AI Analysis & Priority</span>
+          <span>Next: Review & Submit</span>
           <ArrowRight className="w-4 h-4" />
         </button>
       </div>

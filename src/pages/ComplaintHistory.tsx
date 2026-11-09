@@ -44,10 +44,10 @@ export const ComplaintHistory: React.FC = () => {
         }
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
-          const matchId = c.id.toLowerCase().includes(q);
-          const matchCat = c.category.toLowerCase().includes(q);
-          const matchDesc = c.description.toLowerCase().includes(q);
-          const matchLoc = c.location.address.toLowerCase().includes(q);
+          const matchId = (c.id || '').toLowerCase().includes(q);
+          const matchCat = (c.category || '').toLowerCase().includes(q);
+          const matchDesc = (c.description || '').toLowerCase().includes(q);
+          const matchLoc = (c.location?.address || '').toLowerCase().includes(q);
           if (!matchId && !matchCat && !matchDesc && !matchLoc) return false;
         }
         return true;
@@ -71,7 +71,7 @@ export const ComplaintHistory: React.FC = () => {
     const rows = filteredComplaints
       .map(
         (c) =>
-          `"${c.id}","${c.category}","${c.department}","${c.priority}","${c.status}","${c.createdAt}","${c.location.address.replace(/"/g, '""')}"`
+          `"${c.id}","${c.category}","${c.department}","${c.priority}","${c.status}","${c.createdAt}","${(c.location?.address || '').replace(/"/g, '""')}"`
       )
       .join('\n');
 

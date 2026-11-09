@@ -113,7 +113,8 @@ export const Step4ReviewConfirm: React.FC<Step4ReviewConfirmProps> = ({
                 {draft.location.address}
               </p>
               <p className="text-[11px] text-slate-500 font-mono mt-0.5">
-                {draft.location.ward} • {draft.location.zone} ({draft.location.latitude.toFixed(4)}, {draft.location.longitude.toFixed(4)})
+                {(draft.location.ward || draft.location.zone) ? `${[draft.location.ward, draft.location.zone].filter(Boolean).join(' • ')} — ` : ''}
+                {draft.location.latitude.toFixed(4)}° N, {draft.location.longitude.toFixed(4)}° E
               </p>
             </div>
           </div>

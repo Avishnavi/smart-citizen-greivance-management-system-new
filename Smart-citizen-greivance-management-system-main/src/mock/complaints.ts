@@ -38,8 +38,8 @@ export const INITIAL_COMPLAINTS: Complaint[] = [
       {
         id: 't-2',
         step: 2,
-        title: 'AI Analysis Completed',
-        description: 'Classified as Pothole (96% conf). Priority set to High due to arterial road safety index.',
+        title: 'Complaint Received / Under Review',
+        description: 'Grievance verified and cataloged for arterial road maintenance dispatch.',
         timestamp: '2026-08-30T10:15:15.000Z',
         completed: true,
         current: false
@@ -119,8 +119,8 @@ export const INITIAL_COMPLAINTS: Complaint[] = [
       {
         id: 't-22',
         step: 2,
-        title: 'AI Analysis Completed',
-        description: 'Classified under Streetlight. Priority evaluated as Medium.',
+        title: 'Complaint Received / Under Review',
+        description: 'Grievance verified and queued for electrical zone inspection.',
         timestamp: '2026-08-25T19:30:10.000Z',
         completed: true,
         current: false
@@ -213,8 +213,8 @@ export const INITIAL_COMPLAINTS: Complaint[] = [
       {
         id: 't-32',
         step: 2,
-        title: 'AI Analysis Completed',
-        description: 'Category Drainage/Sewage confirmed. High priority health hazard detected.',
+        title: 'Complaint Received / Under Review',
+        description: 'Drainage blockage report verified and queued for emergency jetting crew.',
         timestamp: '2026-08-29T08:00:12.000Z',
         completed: true,
         current: false
@@ -294,8 +294,8 @@ export const INITIAL_COMPLAINTS: Complaint[] = [
       {
         id: 't-42',
         step: 2,
-        title: 'AI Analysis Completed',
-        description: 'Classified under Solid Waste Management. Medium Priority.',
+        title: 'Complaint Received / Under Review',
+        description: 'Commercial waste overflow verified and queued for compactor route dispatch.',
         timestamp: '2026-08-20T07:45:10.000Z',
         completed: true,
         current: false
@@ -385,8 +385,8 @@ export const INITIAL_COMPLAINTS: Complaint[] = [
       {
         id: 't-52',
         step: 2,
-        title: 'AI Analysis Completed',
-        description: 'Classified as Water Supply. Priority Low/Normal.',
+        title: 'Complaint Received / Under Review',
+        description: 'Drinking water pipeline report logged and queued for depot allocation.',
         timestamp: '2026-08-31T17:00:15.000Z',
         completed: true,
         current: false

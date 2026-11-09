@@ -140,4 +140,123 @@ async function getTopEscalations(limit = 5) {
     .limit(limit);
 }
 
-module.exports = { assessEscalationRisk, saveEscalation, getTopEscalations };
+/**
+ * Trigger an escalation for a task with deduplication and tiering.
+ * @param {object} task - ComplaintTask document
+ * @param {object} options - { escalationLevel, triggerCondition, reasons, recipientRole, actionTaken }
+ * @returns {Promise<object>} { escalated: boolean, escalation: object, reason?: string }
+ */
+async function triggerTaskEscalation(task, options = {}) {
+  const level = options.escalationLevel || 1;
+  const triggerCondition = options.triggerCondition || 'SLA_BREACH';
+
+  // Deduplication check: Do not create redundant escalation if an unacknowledged one exists for this task at this level
+  const existing = await Escalation.findOne({
+    taskId: task.taskId,
+    escalationLevel: level,
+    isAcknowledged: false,
+  });
+
+  if (existing) {
+    return {
+      escalated: false,
+      reason: 'Duplicate unacknowledged escalation exists',
+      escalation: existing,
+    };
+  }
+
+  const riskLevel = level >= 3 ? 'CRITICAL' : level >= 2 ? 'HIGH' : 'MEDIUM';
+  const recipient = options.recipientRole || (level >= 3 ? 'central_admin' : 'department_supervisor');
+
+  const now = new Date();
+  const createdAt = task.createdAt ? new Date(task.createdAt) : now;
+  const elapsedHours = (now - createdAt) / (1000 * 60 * 60);
+
+  const escalation = await Escalation.create({
+    complaintId: task.complaintId,
+    taskId: task.taskId,
+    complaintCategory: task.title || 'Municipal Task',
+    departmentName: task.departmentName || '',
+    triggerCondition,
+    recipientRole: recipient,
+    escalationRisk: riskLevel,
+    escalationLevel: level,
+    elapsedHours: Math.round(elapsedHours * 10) / 10,
+    expectedResolutionHours: task.slaHours || 72,
+    priority: task.priority || 'MEDIUM',
+    currentStatus: task.status,
+    reasons: options.reasons || [`Task ${task.taskId} triggered Level ${level} escalation (${triggerCondition})`],
+    recommendedAction:
+      level >= 3
+        ? 'Executive intervention required: Central Admin review and direct reassignment.'
+        : level >= 2
+        ? 'Supervisor intervention required: Expedite work order and verify field crew dispatch.'
+        : 'Field technician notification: 75% SLA elapsed, prioritize immediate execution.',
+    predictionStatus: 'completed',
+    isAcknowledged: false,
+    supervisorNotified: true,
+    notifiedAt: now,
+    assessedAt: now,
+  });
+
+  // Update task's escalationLevel
+  try {
+    if (typeof task.save === 'function') {
+      task.escalationLevel = Math.max(task.escalationLevel || 0, level);
+      await task.save();
+    }
+  } catch (err) {
+    console.warn(`Could not update escalationLevel on task ${task.taskId}:`, err.message);
+  }
+
+  // Log workflow event
+  try {
+    const WorkflowEvent = require('../models/WorkflowEvent');
+    await WorkflowEvent.create({
+      complaintId: task.complaintId,
+      taskId: task.taskId,
+      eventType: 'TASK_ESCALATED',
+      actor: {
+        type: 'system',
+        id: 'system',
+        name: 'SLA Escalation Engine',
+      },
+      description: `Task ${task.taskId} in ${task.departmentName} escalated to Level ${level} (${riskLevel}). Trigger: ${triggerCondition}`,
+      metadata: { taskId: task.taskId, escalationLevel: level, triggerCondition },
+    });
+  } catch (err) {
+    console.warn(`Could not log TASK_ESCALATED event for ${task.taskId}:`, err.message);
+  }
+
+  return { escalated: true, escalation };
+}
+
+/**
+ * Acknowledge an escalation.
+ * @param {string} escalationId
+ * @param {object} user - User acknowledging the escalation
+ * @returns {Promise<object>} Updated escalation
+ */
+async function acknowledgeTaskEscalation(escalationId, user) {
+  const escalation = await Escalation.findById(escalationId);
+  if (!escalation) {
+    throw new Error(`Escalation ${escalationId} not found`);
+  }
+
+  escalation.isAcknowledged = true;
+  escalation.acknowledgedAt = new Date();
+  escalation.acknowledgedBy = user?._id;
+  escalation.acknowledgedByName = user?.name || 'Authorized Staff';
+  escalation.actionTaken = `Acknowledged by ${user?.name || 'Staff'} (${user?.role || 'authorized_user'})`;
+
+  await escalation.save();
+  return escalation;
+}
+
+module.exports = {
+  assessEscalationRisk,
+  saveEscalation,
+  getTopEscalations,
+  triggerTaskEscalation,
+  acknowledgeTaskEscalation,
+};

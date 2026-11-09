@@ -8,6 +8,11 @@ import type {
   ComplaintPriority,
   AIAnalysisResult,
   TimelineEvent,
+  DepartmentTask,
+  RecurringIssueHotspot,
+  HotspotMetrics,
+  OfficialComplaintMessage,
+  ComplaintAssociatedDepartment,
 } from '../types';
 import { fetchApi } from './api';
 import { INITIAL_COMPLAINTS } from '../mock/complaints';
@@ -118,6 +123,9 @@ function isAiEvent(item: any): boolean {
  * Normalizes backend MongoDB complaint format to the frontend Complaint interface
  */
 function normalizeComplaint(c: any): Complaint {
+  if (c && typeof c === 'object' && (c.data || c.complaint)) {
+    c = c.data || c.complaint;
+  }
   const statusMap: Record<string, any> = {
     SUBMITTED: 'Pending',
     UNDER_REVIEW: 'Pending',
@@ -134,6 +142,7 @@ function normalizeComplaint(c: any): Complaint {
     CLOSED: 'Resolved',
     RESOLVED: 'Resolved',
     REQUIRES_REVIEW: 'In Progress',
+    REOPENED: 'In Progress',
     REJECTED: 'Rejected',
   };
 
@@ -148,8 +157,8 @@ function normalizeComplaint(c: any): Complaint {
   const rawTimeline = (c.timeline || []).filter((t: any) => !isAiEvent(t));
 
   const statusVal = (statusMap[c.status] || c.status || 'Pending') as ComplaintStatus;
-  const isResolved = statusVal === 'Resolved' || c.status === 'CLOSED';
-  const isInProgress = statusVal === 'In Progress' || c.status === 'IN_PROGRESS';
+  const isResolved = (statusVal === 'Resolved' || c.status === 'CLOSED') && c.status !== 'REOPENED';
+  const isInProgress = statusVal === 'In Progress' || c.status === 'IN_PROGRESS' || c.status === 'REOPENED';
   const isAssigned = Boolean(c.assignedOfficer || c.routing?.assignedOfficerName || isInProgress || isResolved);
   const isFeedbackDone = Boolean(c.feedback);
   const isFinalStatus = isResolved || statusVal === 'Rejected' || c.status === 'CLOSED' || c.status === 'REJECTED';
@@ -297,11 +306,12 @@ function normalizeComplaint(c: any): Complaint {
 export async function fetchAllComplaints(citizenId?: string): Promise<Complaint[]> {
   try {
     const query = citizenId ? `?citizenId=${encodeURIComponent(citizenId)}` : '';
-    const data = await fetchApi<any[]>(`/complaints${query}`);
-    return Array.isArray(data) ? data.map(normalizeComplaint) : [];
+    const res = await fetchApi<any>(`/complaints${query}`);
+    const items = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+    return items.map(normalizeComplaint);
   } catch (err) {
-    console.warn('API fetchAllComplaints failed — falling back to initial data:', err);
-    return INITIAL_COMPLAINTS;
+    console.warn('API fetchAllComplaints error:', err);
+    return [];
   }
 }
 
@@ -321,11 +331,8 @@ export async function fetchComplaintById(id: string): Promise<Complaint | null> 
     }
     return normalized;
   } catch (err) {
-    console.warn(`API fetchComplaintById(${id}) failed — searching local cache:`, err);
-    const found = INITIAL_COMPLAINTS.find(
-      (c) => c.id.toLowerCase() === id.trim().toLowerCase()
-    );
-    return found || null;
+    console.warn(`API fetchComplaintById(${id}) error:`, err);
+    return null;
   }
 }
 
@@ -406,57 +413,11 @@ export async function createNewComplaint(input: CreateComplaintInput): Promise<C
     },
   };
 
-  try {
-    const res = await fetchApi<any>('/complaints', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    return normalizeComplaint(res);
-  } catch (err) {
-    console.warn('API createNewComplaint failed — using client generator:', err);
-    const nextNum = 1246 + Math.floor(Math.random() * 100);
-    const newId = `CMP-2026-00${nextNum}`;
-    const now = new Date().toISOString();
-
-    return {
-      id: newId,
-      userId: input.userId || 'CIT-8842',
-      description: input.description,
-      voiceUrl: input.voiceUrl,
-      voiceDuration: input.voiceDuration,
-      imageUrls: input.imageUrls || [],
-      category: input.category,
-      department: input.department || 'Public Health & Sanitation',
-      location: input.location,
-      duplicateStatus: (input.duplicateStatus as any) || 'none',
-      priority: input.priority,
-      priorityScore: input.priorityScore || 70,
-      priorityFactors: input.priorityFactors || ['Standard Citizen Grievance SLA'],
-      status: 'Pending',
-      createdAt: now,
-      updatedAt: now,
-      timeline: [
-        {
-          id: `t-${Date.now()}-1`,
-          step: 1,
-          title: 'Complaint Submitted',
-          description: 'Successfully registered via Citizen Grievance Portal.',
-          timestamp: now,
-          completed: true,
-          current: false,
-        },
-        {
-          id: `t-${Date.now()}-2`,
-          step: 2,
-          title: 'AI Analysis Completed',
-          description: `Classified as ${input.category} with ${input.priority} Priority.`,
-          timestamp: now,
-          completed: true,
-          current: true,
-        },
-      ],
-    };
-  }
+  const res = await fetchApi<any>('/complaints', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return normalizeComplaint(res);
 }
 
 /**
@@ -524,9 +485,398 @@ export async function fetchPreviewAnalysis(
  */
 export async function fetchDashboardStatistics(): Promise<DashboardStatistics | null> {
   try {
-    return await fetchApi<DashboardStatistics>('/dashboard/statistics');
+    const res = await fetchApi<any>('/dashboard/statistics');
+    return res?.data || res || null;
   } catch (err) {
     console.warn('API fetchDashboardStatistics failed:', err);
     return null;
+  }
+}
+
+// ─── Phase 2: Department Task & Workflow Operations ──────────────────────────
+
+/**
+ * Fetch department tasks associated with a single complaint
+ */
+export async function fetchComplaintTasks(complaintId: string): Promise<DepartmentTask[]> {
+  try {
+    const res = await fetchApi<any>(`/complaints/${complaintId}/tasks`);
+    if (Array.isArray(res)) return res;
+    if (Array.isArray(res?.tasks)) return res.tasks;
+    if (Array.isArray(res?.data)) return res.data;
+    return [];
+  } catch (err) {
+    console.warn(`Failed to fetch tasks for ${complaintId}:`, err);
+    return [];
+  }
+}
+
+/**
+ * Fetch all department tasks scoped to current user's role/department
+ */
+export async function fetchAllDepartmentTasks(params: {
+  status?: string;
+  departmentName?: string;
+  taskType?: string;
+} = {}): Promise<DepartmentTask[]> {
+  try {
+    const queryParams = new URLSearchParams();
+    if (params.status && params.status !== 'all') queryParams.append('status', params.status);
+    if (params.departmentName && params.departmentName !== 'all') queryParams.append('departmentName', params.departmentName);
+    if (params.taskType && params.taskType !== 'all') queryParams.append('taskType', params.taskType);
+
+    const qs = queryParams.toString() ? `?${queryParams.toString()}` : '';
+    const res = await fetchApi<any>(`/tasks${qs}`);
+    if (Array.isArray(res)) return res;
+    if (Array.isArray(res?.data)) return res.data;
+    if (Array.isArray(res?.tasks)) return res.tasks;
+    return [];
+  } catch (err) {
+    console.warn('Failed to fetch department tasks:', err);
+    return [];
+  }
+}
+
+/**
+ * Central Admin approves/rejects/clarifies complaint and creates department tasks
+ */
+export async function approveComplaintApi(
+  complaintId: string,
+  payload: {
+    action: 'approve' | 'reject' | 'request_clarification';
+    primaryDepartment?: { departmentId?: string; departmentName: string; description?: string };
+    supportingDepartments?: Array<{ departmentId?: string; departmentName: string; reason?: string }>;
+    priority?: string;
+    adminNotes?: string;
+    rejectionReason?: string;
+  }
+): Promise<any> {
+  return await fetchApi(`/complaints/${complaintId}/approve`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Supervisor assigns task to a department employee
+ */
+export async function assignTaskApi(
+  taskId: string,
+  payload: { employeeId?: string; employeeName: string }
+): Promise<any> {
+  return await fetchApi(`/tasks/${taskId}/assign`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Employee acknowledges or updates task status
+ */
+export async function updateTaskStatusApi(
+  taskId: string,
+  payload: { status: string; note?: string }
+): Promise<any> {
+  return await fetchApi(`/tasks/${taskId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Employee submits resolution notes and proof for AI verification
+ */
+export async function submitTaskResolutionApi(
+  taskId: string,
+  payload: { resolutionNotes: string; evidenceUrls?: string[]; actionsTaken?: string[] }
+): Promise<any> {
+  return await fetchApi(`/tasks/${taskId}/resolution`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Department Supervisor or Central Admin verifies task resolution
+ */
+export async function verifyTaskResolutionApi(
+  taskId: string,
+  payload: { action: 'approve' | 'request_rework' | 'reject'; comments: string; reworkRequirements?: string[] }
+): Promise<any> {
+  return await fetchApi(`/tasks/${taskId}/verify`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Central Admin or Supervisor finalizes complaint closure after tasks are verified
+ */
+export async function closeComplaintApi(complaintId: string): Promise<any> {
+  return await fetchApi(`/complaints/${complaintId}/close`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Citizen or Admin reopens a resolved or closed complaint
+ */
+export async function reopenComplaintApi(complaintId: string, reason?: string): Promise<any> {
+  return await fetchApi(`/complaints/${complaintId}/reopen`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+/**
+ * Citizen responds to a clarification request from Central Admin
+ */
+export async function submitClarificationApi(
+  complaintId: string,
+  clarificationText: string,
+  additionalImageUrls?: string[]
+): Promise<any> {
+  return await fetchApi(`/complaints/${complaintId}/clarification`, {
+    method: 'POST',
+    body: JSON.stringify({ clarificationText, additionalImageUrls }),
+  });
+}
+
+/**
+ * Fetch task SLA status and predictive delay details
+ */
+export async function fetchTaskSlaApi(taskId: string): Promise<any> {
+  return await fetchApi(`/tasks/${taskId}/sla`);
+}
+
+/**
+ * Supervisor or Admin pauses task SLA clock
+ */
+export async function pauseTaskSlaApi(taskId: string, reason: string): Promise<any> {
+  return await fetchApi(`/tasks/${taskId}/pause-sla`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+/**
+ * Supervisor or Admin resumes task SLA clock
+ */
+export async function resumeTaskSlaApi(taskId: string): Promise<any> {
+  return await fetchApi(`/tasks/${taskId}/resume-sla`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Supervisor or Admin triggers task escalation
+ */
+export async function escalateTaskApi(
+  taskId: string,
+  payload: { escalationLevel?: number; triggerCondition?: string; reason?: string }
+): Promise<any> {
+  return await fetchApi(`/tasks/${taskId}/escalate`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Acknowledge an escalation record
+ */
+export async function acknowledgeEscalationApi(escalationId: string): Promise<any> {
+  return await fetchApi(`/tasks/escalations/${escalationId}/acknowledge`, {
+    method: 'PATCH',
+  });
+}
+
+/**
+ * Fetch aggregated SLA metrics for dashboard
+ */
+export async function fetchSlaMetricsApi(): Promise<any> {
+  return await fetchApi('/dashboard/sla-metrics');
+}
+
+/**
+ * Fetch detected recurring issue hotspots
+ */
+export async function fetchHotspotsApi(params: {
+  category?: string;
+  ward?: string;
+  status?: string;
+  observationWindowDays?: number;
+} = {}): Promise<RecurringIssueHotspot[]> {
+  try {
+    const queryParams = new URLSearchParams();
+    if (params.category && params.category !== 'all') queryParams.append('category', params.category);
+    if (params.ward && params.ward !== 'all') queryParams.append('ward', params.ward);
+    if (params.status && params.status !== 'all') queryParams.append('status', params.status);
+    if (params.observationWindowDays) queryParams.append('observationWindowDays', String(params.observationWindowDays));
+
+    const qs = queryParams.toString() ? `?${queryParams.toString()}` : '';
+    const res = await fetchApi<{ success: boolean; count: number; data: RecurringIssueHotspot[] }>(`/dashboard/hotspots${qs}`);
+    if (Array.isArray(res)) return res;
+    if (res && Array.isArray((res as any).data)) return (res as any).data;
+    return [];
+  } catch (err) {
+    console.warn('Failed to fetch hotspots:', err);
+    return [];
+  }
+}
+
+/**
+ * Fetch hotspot details by ID
+ */
+export async function fetchHotspotDetailsApi(id: string): Promise<RecurringIssueHotspot | null> {
+  try {
+    const res = await fetchApi<RecurringIssueHotspot>(`/dashboard/hotspots/${id}`);
+    return res;
+  } catch (err) {
+    console.warn(`Failed to fetch hotspot ${id}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Trigger municipality-wide DBSCAN hotspot scan (Central Admin)
+ */
+export async function runHotspotScanApi(params: {
+  epsilonMeters?: number;
+  minComplaints?: number;
+  observationWindowDays?: number;
+} = {}): Promise<any> {
+  return await fetchApi('/dashboard/hotspots/scan', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+/**
+ * Update hotspot lifecycle status and preventive action plan
+ */
+export async function updateHotspotStatusApi(
+  id: string,
+  payload: {
+    status: string;
+    proposedAction?: string;
+    responsibleDepartment?: string;
+    targetCompletionDate?: string;
+    budgetEstimated?: number;
+    notes?: string;
+  }
+): Promise<any> {
+  return await fetchApi(`/dashboard/hotspots/${id}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Fetch aggregated hotspot metrics for dashboard
+ */
+export async function fetchHotspotMetricsApi(): Promise<HotspotMetrics | null> {
+  try {
+    const res = await fetchApi<HotspotMetrics>('/dashboard/hotspot-metrics');
+    return res;
+  } catch (err) {
+    console.warn('Failed to fetch hotspot metrics:', err);
+    return null;
+  }
+}
+
+// ─── Official Citizen–Department Chat APIs ───────────────────────────────────
+
+/**
+ * Fetch associated departments for a complaint (to render department conversation tabs).
+ */
+export async function fetchComplaintDepartmentsApi(
+  complaintId: string
+): Promise<ComplaintAssociatedDepartment[]> {
+  try {
+    const cleanId = encodeURIComponent(complaintId.trim());
+    const res = await fetchApi<ComplaintAssociatedDepartment[]>(`/complaints/${cleanId}/departments`);
+    return Array.isArray(res) ? res : [];
+  } catch (err: any) {
+    console.warn(`Failed to fetch departments for complaint ${complaintId}:`, err.message);
+    throw err;
+  }
+}
+
+/**
+ * Fetch messages for a specific department under a complaint.
+ */
+export async function fetchDepartmentMessagesApi(
+  complaintId: string,
+  departmentId: string,
+  options: { page?: number; limit?: number; taskId?: string } = {}
+): Promise<OfficialComplaintMessage[]> {
+  try {
+    const cleanComplaintId = encodeURIComponent(complaintId.trim());
+    const cleanDeptId = encodeURIComponent(departmentId.trim());
+
+    const queryParams = new URLSearchParams();
+    if (options.page) queryParams.set('page', String(options.page));
+    if (options.limit) queryParams.set('limit', String(options.limit));
+    if (options.taskId) queryParams.set('taskId', options.taskId);
+
+    const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+    const endpoint = `/complaints/${cleanComplaintId}/departments/${cleanDeptId}/messages${queryString}`;
+
+    const res = await fetchApi<OfficialComplaintMessage[]>(endpoint);
+    return Array.isArray(res) ? res : [];
+  } catch (err: any) {
+    console.warn(`Failed to fetch messages for complaint ${complaintId}, dept ${departmentId}:`, err.message);
+    throw err;
+  }
+}
+
+/**
+ * Send an official citizen message to an assigned department.
+ * Identity fields (senderId, senderName, senderRole) are strictly derived on the backend.
+ */
+export async function sendDepartmentMessageApi(
+  complaintId: string,
+  departmentId: string,
+  payload: {
+    message: string;
+    attachments?: string[];
+    taskId?: string;
+    isInternal?: boolean;
+    messageType?: string;
+  }
+): Promise<OfficialComplaintMessage> {
+  const cleanComplaintId = encodeURIComponent(complaintId.trim());
+  const cleanDeptId = encodeURIComponent(departmentId.trim());
+
+  const res = await fetchApi<OfficialComplaintMessage>(
+    `/complaints/${cleanComplaintId}/departments/${cleanDeptId}/messages`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        message: payload.message.trim(),
+        attachments: payload.attachments || [],
+        taskId: payload.taskId || undefined,
+        isInternal: Boolean(payload.isInternal),
+        messageType: payload.messageType || undefined,
+      }),
+    }
+  );
+
+  return res;
+}
+
+/**
+ * Fetch complaint-level legacy messages where departmentId is null.
+ */
+export async function fetchLegacyMessagesApi(
+  complaintId: string
+): Promise<OfficialComplaintMessage[]> {
+  try {
+    const cleanId = encodeURIComponent(complaintId.trim());
+    const res = await fetchApi<OfficialComplaintMessage[]>(`/complaints/${cleanId}/messages?legacyOnly=true`);
+    return Array.isArray(res) ? res : [];
+  } catch (err: any) {
+    console.warn(`Failed to fetch legacy messages for complaint ${complaintId}:`, err.message);
+    return [];
   }
 }

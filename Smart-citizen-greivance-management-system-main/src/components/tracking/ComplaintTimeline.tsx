@@ -8,6 +8,8 @@ import {
   Check
 } from 'lucide-react';
 
+import { formatTimelineTimestamp } from '../../utils/dateUtils';
+
 interface ComplaintTimelineProps {
   timeline: TimelineEvent[];
   onAddFeedbackClick?: () => void;
@@ -20,28 +22,35 @@ export const ComplaintTimeline: React.FC<ComplaintTimelineProps> = ({
   hasFeedback
 }) => {
   const getStepIcon = (completed: boolean, current: boolean) => {
-    if (completed) {
-      return <Check className="w-4 h-4 text-white stroke-[3]" />;
-    }
     if (current) {
       return <Clock className="w-4 h-4 text-white animate-spin" />;
+    }
+    if (completed) {
+      return <Check className="w-4 h-4 text-white stroke-[3]" />;
     }
     return <Circle className="w-3.5 h-3.5 text-slate-300 fill-current" />;
   };
 
-  const formatTimestamp = (timestamp: string) => {
-    if (!timestamp || timestamp === 'Pending') return 'Pending';
-    try {
-      const date = new Date(timestamp);
-      return (
-        date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) +
-        ' • ' +
-        date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      );
-    } catch {
-      return timestamp;
-    }
-  };
+  const formatTimestamp = (timestamp: string) => formatTimelineTimestamp(timestamp);
+
+  const visibleTimeline = (timeline || []).filter((item) => {
+    const t = (item.title || '').toLowerCase();
+    const d = (item.description || '').toLowerCase();
+    const isAi =
+      /\b(ai|llm)\b/i.test(t) ||
+      /\b(ai|llm)\b/i.test(d) ||
+      t.includes('ai processing') ||
+      t.includes('ai analysis') ||
+      t.includes('ai classification') ||
+      t.includes('ai verification') ||
+      t.includes('ai scoring') ||
+      t.includes('ai categorization') ||
+      t.includes('ai prediction') ||
+      d.includes('ai pipeline') ||
+      d.includes('llm analysis') ||
+      d.includes('ai analysis');
+    return !isAi;
+  });
 
   return (
     <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-6">
@@ -59,23 +68,28 @@ export const ComplaintTimeline: React.FC<ComplaintTimelineProps> = ({
         </span>
       </div>
 
-      <div className="relative pl-6 space-y-6 before:absolute before:left-3 before:top-3 before:bottom-3 before:w-0.5 before:bg-slate-200">
-        {timeline.map((item) => {
-          const isFeedbackStep = item.step === 6;
+      {visibleTimeline.length === 0 ? (
+        <div className="py-8 text-center text-slate-400 text-xs">
+          No workflow timeline events recorded yet.
+        </div>
+      ) : (
+        <div className="relative pl-6 space-y-6 before:absolute before:left-3 before:top-3 before:bottom-3 before:w-0.5 before:bg-slate-200">
+          {visibleTimeline.map((item, idx) => {
+            const isFeedbackStep = item.step === 6;
 
-          return (
-            <div key={item.id} className="relative group">
-              <div
-                className={`absolute -left-6 top-0.5 w-6 h-6 rounded-full flex items-center justify-center transition-all ${
-                  item.completed
-                    ? 'bg-emerald-600 shadow-sm shadow-emerald-600/30 ring-4 ring-emerald-50'
-                    : item.current
-                    ? 'bg-sky-600 shadow-md shadow-sky-600/30 ring-4 ring-sky-100 animate-priority-pulse'
-                    : 'bg-white border-2 border-slate-200'
-                }`}
-              >
-                {getStepIcon(item.completed, item.current)}
-              </div>
+            return (
+              <div key={item.id || idx} className="relative group">
+                <div
+                  className={`absolute -left-6 top-0.5 w-6 h-6 rounded-full flex items-center justify-center transition-all ${
+                    item.current
+                      ? 'bg-sky-600 shadow-md shadow-sky-600/30 ring-4 ring-sky-100 animate-priority-pulse'
+                      : item.completed
+                      ? 'bg-emerald-600 shadow-sm shadow-emerald-600/30 ring-4 ring-emerald-50'
+                      : 'bg-white border-2 border-slate-200'
+                  }`}
+                >
+                  {getStepIcon(item.completed, item.current)}
+                </div>
 
               <div
                 className={`p-4 rounded-2xl border transition ${
@@ -135,7 +149,8 @@ export const ComplaintTimeline: React.FC<ComplaintTimelineProps> = ({
             </div>
           );
         })}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

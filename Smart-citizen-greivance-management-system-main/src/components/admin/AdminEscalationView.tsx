@@ -1,7 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import type { Complaint } from '../../types';
+import { parseSafeDate } from '../../utils/dateUtils';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { CategoryIcon } from '../common/CategoryIcon';
+import { fetchSlaMetricsApi } from '../../services/complaintService';
 import {
   AlertTriangle,
   Clock,
@@ -32,6 +34,15 @@ export const AdminEscalationView: React.FC<AdminEscalationViewProps> = ({
   const [noticeMessage, setNoticeMessage] = useState<string>('URGENT: This grievance has exceeded SLA standard turnaround. Executive inspection required immediately.');
   const [escalateModalId, setEscalateModalId] = useState<string | null>(null);
   const [escalateReason, setEscalateReason] = useState<string>('SLA Turnaround exceeded standard municipal window.');
+  const [slaMetrics, setSlaMetrics] = useState<any | null>(null);
+
+  useEffect(() => {
+    fetchSlaMetricsApi()
+      .then((res) => {
+        if (res?.success) setSlaMetrics(res.data);
+      })
+      .catch(() => {});
+  }, []);
 
   // Categorize complaints for SLA analysis
   const categorized = useMemo(() => {
@@ -45,14 +56,16 @@ export const AdminEscalationView: React.FC<AdminEscalationViewProps> = ({
     // Overdue (created > 2 days ago and not resolved, or high priority > 1 day)
     const overdueList = complaints.filter((c) => {
       if (c.status === 'Resolved') return false;
-      const ageHours = (now - new Date(c.createdAt).getTime()) / (1000 * 60 * 60);
+      const createdTime = parseSafeDate(c.createdAt)?.getTime() || now;
+      const ageHours = (now - createdTime) / (1000 * 60 * 60);
       return ageHours > 48 || (c.priority === 'High' && ageHours > 24);
     });
 
     // SLA Approaching (age between 12h and 36h)
     const slaApproachingList = complaints.filter((c) => {
       if (c.status === 'Resolved') return false;
-      const ageHours = (now - new Date(c.createdAt).getTime()) / (1000 * 60 * 60);
+      const createdTime = parseSafeDate(c.createdAt)?.getTime() || now;
+      const ageHours = (now - createdTime) / (1000 * 60 * 60);
       return ageHours >= 12 && ageHours <= 48;
     });
 
@@ -64,7 +77,8 @@ export const AdminEscalationView: React.FC<AdminEscalationViewProps> = ({
     // Long Pending (> 24 hours in Pending status)
     const longPendingList = complaints.filter((c) => {
       if (c.status !== 'Pending') return false;
-      const ageHours = (now - new Date(c.createdAt).getTime()) / (1000 * 60 * 60);
+      const createdTime = parseSafeDate(c.createdAt)?.getTime() || now;
+      const ageHours = (now - createdTime) / (1000 * 60 * 60);
       return ageHours >= 24;
     });
 
@@ -128,14 +142,34 @@ export const AdminEscalationView: React.FC<AdminEscalationViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-3 self-start md:self-auto text-xs font-bold">
-          <div className="px-4 py-2.5 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-center">
+        <div className="flex flex-wrap items-center gap-3 self-start md:self-auto text-xs font-bold">
+          {slaMetrics && (
+            <>
+              <div className="px-3.5 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl text-center">
+                <span className="text-emerald-300 text-[10px] uppercase block">SLA Compliance</span>
+                <span className="text-emerald-400 text-lg font-black">{slaMetrics.complianceRate}%</span>
+              </div>
+              <div className="px-3.5 py-2 bg-sky-500/10 border border-sky-500/20 rounded-2xl text-center">
+                <span className="text-sky-300 text-[10px] uppercase block">On Track Tasks</span>
+                <span className="text-sky-400 text-lg font-black">{slaMetrics.slaBreakdown?.onTrack ?? 0}</span>
+              </div>
+              <div className="px-3.5 py-2 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-center">
+                <span className="text-amber-300 text-[10px] uppercase block">At Risk Tasks</span>
+                <span className="text-amber-400 text-lg font-black">{slaMetrics.slaBreakdown?.atRisk ?? 0}</span>
+              </div>
+              <div className="px-3.5 py-2 bg-orange-500/10 border border-orange-500/20 rounded-2xl text-center">
+                <span className="text-orange-300 text-[10px] uppercase block">High Delay Risk (M10)</span>
+                <span className="text-orange-400 text-lg font-black">{slaMetrics.delayRiskBreakdown?.highRisk ?? 0}</span>
+              </div>
+            </>
+          )}
+          <div className="px-3.5 py-2 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-center">
             <span className="text-rose-300 text-[10px] uppercase block">Active Escalations</span>
-            <span className="text-rose-400 text-lg font-black">{categorized.escalatedList.length}</span>
+            <span className="text-rose-400 text-lg font-black">{slaMetrics?.escalations?.total ?? categorized.escalatedList.length}</span>
           </div>
-          <div className="px-4 py-2.5 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-center">
+          <div className="px-3.5 py-2 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-center">
             <span className="text-amber-300 text-[10px] uppercase block">Overdue SLA</span>
-            <span className="text-amber-400 text-lg font-black">{categorized.overdueList.length}</span>
+            <span className="text-amber-400 text-lg font-black">{slaMetrics?.slaBreakdown?.overdue ?? categorized.overdueList.length}</span>
           </div>
         </div>
       </div>

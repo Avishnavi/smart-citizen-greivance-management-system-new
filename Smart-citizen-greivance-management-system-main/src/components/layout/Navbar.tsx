@@ -12,8 +12,6 @@ import {
   Search,
   History,
   Home as HomeIcon,
-  Shield,
-  Wrench,
   ChevronDown,
   LogOut,
   LogIn,
@@ -153,29 +151,9 @@ export const Navbar: React.FC = () => {
               />
             </div>
 
-            {/* Officer Portal Switcher */}
-            <Link
-              to="/officer"
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 border border-amber-300 rounded-xl text-xs font-bold transition shadow-2xs hover:scale-[1.02] active:scale-98"
-              title="Go to Department Field Officer Portal"
-            >
-              <Wrench className="w-3.5 h-3.5 text-amber-600" />
-              <span className="hidden lg:inline">Officer Portal</span>
-            </Link>
-
-            {/* Admin Portal Switcher */}
-            <Link
-              to="/admin"
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-xs hover:shadow hover:scale-[1.02] active:scale-98"
-              title="Go to Municipal Admin Command Center"
-            >
-              <Shield className="w-3.5 h-3.5 text-sky-400" />
-              <span className="hidden md:inline">Admin Command</span>
-            </Link>
-
             {/* User Profile / Login Dropdown */}
             <div className="relative">
-              {isAuthenticated ? (
+              {isAuthenticated && user ? (
                 <>
                   <button
                     type="button"
@@ -218,15 +196,6 @@ export const Navbar: React.FC = () => {
                           >
                             <User className="w-3.5 h-3.5 text-slate-500" />
                             <span>My Ward Profile</span>
-                          </Link>
-
-                          <Link
-                            to="/login"
-                            onClick={() => setIsUserMenuOpen(false)}
-                            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-slate-50 text-slate-700 font-semibold"
-                          >
-                            <Shield className="w-3.5 h-3.5 text-indigo-500" />
-                            <span>Switch Role / Portal</span>
                           </Link>
 
                           <button

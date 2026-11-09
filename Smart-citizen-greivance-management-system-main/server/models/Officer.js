@@ -6,6 +6,18 @@ const OfficerSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     employeeId: { type: String, required: true, unique: true },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true,
+    },
+    role: {
+      type: String,
+      enum: ['department_supervisor', 'department_employee'],
+      default: 'department_employee',
+      index: true,
+    },
     departmentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Department',

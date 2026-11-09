@@ -4,6 +4,7 @@ import { useComplaints } from '../context/ComplaintContext';
 import { ComplaintCard } from '../components/history/ComplaintCard';
 import { EmptyState } from '../components/common/EmptyState';
 import type { ComplaintStatus } from '../types';
+import { parseSafeDate } from '../utils/dateUtils';
 import {
   Search,
   PlusCircle,
@@ -43,10 +44,10 @@ export const ComplaintHistory: React.FC = () => {
         }
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
-          const matchId = c.id.toLowerCase().includes(q);
-          const matchCat = c.category.toLowerCase().includes(q);
-          const matchDesc = c.description.toLowerCase().includes(q);
-          const matchLoc = c.location.address.toLowerCase().includes(q);
+          const matchId = (c.id || '').toLowerCase().includes(q);
+          const matchCat = (c.category || '').toLowerCase().includes(q);
+          const matchDesc = (c.description || '').toLowerCase().includes(q);
+          const matchLoc = (c.location?.address || '').toLowerCase().includes(q);
           if (!matchId && !matchCat && !matchDesc && !matchLoc) return false;
         }
         return true;
@@ -56,7 +57,7 @@ export const ComplaintHistory: React.FC = () => {
           const pOrder = { High: 3, Medium: 2, Low: 1 };
           return (pOrder[b.priority] || 0) - (pOrder[a.priority] || 0);
         }
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        return (parseSafeDate(b.createdAt)?.getTime() || 0) - (parseSafeDate(a.createdAt)?.getTime() || 0);
       });
   }, [complaints, statusFilter, categoryFilter, searchQuery, sortBy]);
 
@@ -70,7 +71,7 @@ export const ComplaintHistory: React.FC = () => {
     const rows = filteredComplaints
       .map(
         (c) =>
-          `"${c.id}","${c.category}","${c.department}","${c.priority}","${c.status}","${c.createdAt}","${c.location.address.replace(/"/g, '""')}"`
+          `"${c.id}","${c.category}","${c.department}","${c.priority}","${c.status}","${c.createdAt}","${(c.location?.address || '').replace(/"/g, '""')}"`
       )
       .join('\n');
 

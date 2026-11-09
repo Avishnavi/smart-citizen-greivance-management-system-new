@@ -4,20 +4,26 @@ const path = require('path');
 // Load environment variables from server/.env or root .env
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
+require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const mongoose = require('mongoose');
 
 const { connectDatabase } = require('./config/database');
 const { errorHandler } = require('./middleware/errorHandler');
 
+const authRouter = require('./routes/auth');
 const complaintsRouter = require('./routes/complaints');
+const tasksRouter = require('./routes/tasks');
 const dashboardRouter = require('./routes/dashboard');
 const departmentsRouter = require('./routes/departments');
 const notificationsRouter = require('./routes/notifications');
 const aiRouter = require('./routes/ai');
+const locationRouter = require('./routes/location');
+const knowledgeRouter = require('./routes/knowledge');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -57,19 +63,30 @@ app.use('/api/', apiLimiter);
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => {
+  const isDbConnected = mongoose.connection.readyState === 1;
   res.json({
     status: 'healthy',
+    database: {
+      connected: isDbConnected,
+      type: (process.env.MONGODB_URI || process.env.MONGO_URI) ? 'MongoDB Atlas' : 'In-Memory',
+      host: isDbConnected ? mongoose.connection.host : null,
+      name: isDbConnected ? mongoose.connection.name : null,
+    },
     timestamp: new Date().toISOString(),
     service: 'Smart City Grievance API',
     version: '1.0.0',
   });
 });
 
+app.use('/api/auth', authRouter);
 app.use('/api/complaints', complaintsRouter);
+app.use('/api/tasks', tasksRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/departments', departmentsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/ai', aiRouter);
+app.use('/api/location', locationRouter);
+app.use('/api/knowledge', knowledgeRouter);
 
 // 404 Route
 app.use('*', (req, res) => {

@@ -2,6 +2,7 @@ import React from 'react';
 import { useNotifications } from '../../context/NotificationContext';
 import { useNavigate } from 'react-router-dom';
 import { Bell, CheckCheck, Clock, CheckCircle2, AlertTriangle, ChevronRight, X } from 'lucide-react';
+import { formatCompactDateTime } from '../../utils/dateUtils';
 
 interface NotificationDropdownProps {
   isOpen: boolean;
@@ -38,15 +39,7 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
     }
   };
 
-  const formatTime = (iso: string) => {
-    try {
-      const date = new Date(iso);
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ', ' +
-             date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-    } catch {
-      return 'Recent';
-    }
-  };
+  const formatTime = (iso: string) => formatCompactDateTime(iso, 'Recent');
 
   return (
     <>

@@ -14,6 +14,11 @@ const WorkflowEventSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    taskId: {
+      type: String,
+      default: null,
+      index: true,
+    },
 
     eventType: {
       type: String,
@@ -40,13 +45,26 @@ const WorkflowEventSchema = new mongoose.Schema(
         'CITIZEN_FEEDBACK_SUBMITTED',
         'COMPLAINT_CLOSED',
         'COMPLAINT_REJECTED',
+        'COMPLAINT_APPROVED',
+        'CLARIFICATION_REQUESTED',
+        'CLARIFICATION_PROVIDED',
+        'TASK_ASSIGNED',
+        'AI_ROUTING_RECOMMENDED',
+        'COMPLAINT_REOPENED',
+        'TASK_SLA_PAUSED',
+        'TASK_SLA_RESUMED',
+        'TASK_ESCALATED',
+        'TASK_VERIFIED',
+        'TASK_REWORK_REQUESTED',
+        'TASK_REJECTED',
+        'SLA_BREACH',
         'SYSTEM_NOTE',
       ],
     },
 
     // Who performed this action
     actor: {
-      type: { type: String, enum: ['citizen', 'officer', 'admin', 'system', 'ai'], default: 'system' },
+      type: { type: String, enum: ['citizen', 'officer', 'supervisor', 'employee', 'admin', 'system', 'ai'], default: 'system' },
       id: { type: String, default: 'system' },
       name: { type: String, default: 'System' },
     },
@@ -69,5 +87,6 @@ const WorkflowEventSchema = new mongoose.Schema(
 );
 
 WorkflowEventSchema.index({ complaintId: 1, createdAt: 1 });
+WorkflowEventSchema.index({ taskId: 1, createdAt: 1 });
 
 module.exports = mongoose.model('WorkflowEvent', WorkflowEventSchema);

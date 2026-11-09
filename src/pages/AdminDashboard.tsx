@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { useComplaints } from '../context/ComplaintContext';
-import type { Complaint, Department, ComplaintStatus } from '../types';
+import type { Complaint, Department, ComplaintStatus, RecurringIssueHotspot, HotspotMetrics, KnowledgeDocument } from '../types';
 import { parseSafeDate } from '../utils/dateUtils';
 import { PriorityBadge } from '../components/common/PriorityBadge';
 import { CategoryIcon } from '../components/common/CategoryIcon';
@@ -10,6 +11,17 @@ import { AIInsights } from '../components/admin/AIInsights';
 import { DepartmentOverview, SIX_CORE_DEPARTMENTS } from '../components/admin/DepartmentOverview';
 import { AdminAssignModal, CORE_DEPARTMENTS } from '../components/admin/AdminAssignModal';
 import { AdminEscalationView } from '../components/admin/AdminEscalationView';
+import { StaffProvisionModal } from '../components/admin/StaffProvisionModal';
+import {
+  approveComplaintApi,
+  closeComplaintApi,
+  fetchHotspotsApi,
+  fetchHotspotMetricsApi,
+  runHotspotScanApi,
+  updateHotspotStatusApi,
+} from '../services/complaintService';
+import { fetchKnowledgeDocuments } from '../services/knowledgeService';
+import { fetchApi } from '../services/api';
 import {
   LayoutDashboard,
   FileSpreadsheet,
@@ -24,11 +36,20 @@ import {
   Shield,
   ChevronLeft,
   ChevronRight,
-  Home,
   Flame,
   ShieldAlert,
   Wrench,
+  UserPlus,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Check,
+  X,
+  BookOpen,
+  LogOut,
+  MessageSquare,
 } from 'lucide-react';
+import { AdminOfficialChatModal } from '../components/admin/AdminOfficialChatModal';
 import {
   AreaChart,
   Area,
@@ -50,7 +71,8 @@ export type AdminTab =
   | 'ai-insights'
   | 'hotspot-map'
   | 'departments'
-  | 'escalations';
+  | 'escalations'
+  | 'knowledge';
 
 const PRIORITY_PIE_COLORS: Record<string, string> = {
   High: '#e11d48',
@@ -59,6 +81,8 @@ const PRIORITY_PIE_COLORS: Record<string, string> = {
 };
 
 export const AdminDashboard: React.FC = () => {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const {
     complaints,
     adminUpdateComplaint,
@@ -71,7 +95,15 @@ export const AdminDashboard: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [selectedComplaintForAssign, setSelectedComplaintForAssign] = useState<Complaint | null>(null);
+  const [selectedComplaintForChat, setSelectedComplaintForChat] = useState<Complaint | null>(null);
+  const [isChatModalOpen, setIsChatModalOpen] = useState(false);
+
+  const handleOpenChatModal = (complaint: Complaint) => {
+    setSelectedComplaintForChat(complaint);
+    setIsChatModalOpen(true);
+  };
   const [focusedMapComplaint, setFocusedMapComplaint] = useState<Complaint | null>(null);
+  const [isStaffModalOpen, setIsStaffModalOpen] = useState(false);
 
   // Table Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -82,6 +114,141 @@ export const AdminDashboard: React.FC = () => {
   const [wardFilter, setWardFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 8;
+
+  // Hotspots State
+  const [serverHotspots, setServerHotspots] = useState<RecurringIssueHotspot[]>([]);
+  const [hotspotMetrics, setHotspotMetrics] = useState<HotspotMetrics | null>(null);
+  const [hotspotsLoading, setHotspotsLoading] = useState(false);
+  const [isScanningHotspots, setIsScanningHotspots] = useState(false);
+  const [hotspotScanResult, setHotspotScanResult] = useState<any | null>(null);
+  const [focusedHotspot, setFocusedHotspot] = useState<RecurringIssueHotspot | null>(null);
+  const [selectedHotspotForAction, setSelectedHotspotForAction] = useState<RecurringIssueHotspot | null>(null);
+  const [hotspotStatusFilter, setHotspotStatusFilter] = useState<string>('all');
+  const [hotspotCategoryFilter, setHotspotCategoryFilter] = useState<string>('all');
+  const [hotspotObservationWindow, setHotspotObservationWindow] = useState<number>(30);
+  const [actionModalStatus, setActionModalStatus] = useState<string>('UNDER_REVIEW');
+  const [actionModalProposedPlan, setActionModalProposedPlan] = useState<string>('');
+  const [actionModalDept, setActionModalDept] = useState<string>('');
+  const [actionModalNotes, setActionModalNotes] = useState<string>('');
+  const [actionModalBudget, setActionModalBudget] = useState<string>('');
+  const [isSubmittingAction, setIsSubmittingAction] = useState<boolean>(false);
+
+  const loadHotspotData = React.useCallback(async () => {
+    try {
+      setHotspotsLoading(true);
+      const [spots, hMetrics] = await Promise.all([
+        fetchHotspotsApi({
+          status: hotspotStatusFilter,
+          category: hotspotCategoryFilter,
+          observationWindowDays: hotspotObservationWindow,
+        }),
+        fetchHotspotMetricsApi(),
+      ]);
+      setServerHotspots(spots);
+      if (hMetrics) setHotspotMetrics(hMetrics);
+    } catch (err) {
+      console.warn('Failed to load hotspots:', err);
+    } finally {
+      setHotspotsLoading(false);
+    }
+  }, [hotspotStatusFilter, hotspotCategoryFilter, hotspotObservationWindow]);
+
+  React.useEffect(() => {
+    if (activeTab === 'hotspot-map') {
+      loadHotspotData();
+    }
+  }, [activeTab, loadHotspotData]);
+
+  // Knowledge Documents / SOP State (M8)
+  const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDocument[]>([]);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+  const [knowledgeSearch, setKnowledgeSearch] = useState('');
+  const [knowledgeDeptFilter, setKnowledgeDeptFilter] = useState('all');
+  const [isReindexing, setIsReindexing] = useState(false);
+  const [reindexMessage, setReindexMessage] = useState<string | null>(null);
+
+  const loadKnowledgeDocs = React.useCallback(async () => {
+    setKnowledgeLoading(true);
+    try {
+      const docs = await fetchKnowledgeDocuments({
+        department: knowledgeDeptFilter !== 'all' ? knowledgeDeptFilter : undefined,
+        search: knowledgeSearch || undefined,
+      });
+      setKnowledgeDocs(docs);
+    } catch (err) {
+      console.error('Failed to load knowledge documents:', err);
+    } finally {
+      setKnowledgeLoading(false);
+    }
+  }, [knowledgeDeptFilter, knowledgeSearch]);
+
+  const handleReindexKnowledge = async () => {
+    setIsReindexing(true);
+    setReindexMessage(null);
+    try {
+      const res = await fetchApi<{ success: boolean; count: number }>('/knowledge/rechunk-all', {
+        method: 'POST',
+      });
+      setReindexMessage(`Re-indexing complete: ${res?.count || 0} chunks updated.`);
+      await loadKnowledgeDocs();
+    } catch (err: any) {
+      setReindexMessage(`Re-indexing failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsReindexing(false);
+    }
+  };
+
+  React.useEffect(() => {
+    if (activeTab === 'knowledge') {
+      loadKnowledgeDocs();
+    }
+  }, [activeTab, loadKnowledgeDocs]);
+
+  const handleTriggerScan = async () => {
+    try {
+      setIsScanningHotspots(true);
+      setHotspotScanResult(null);
+      const res = await runHotspotScanApi({
+        observationWindowDays: hotspotObservationWindow,
+      });
+      setHotspotScanResult(res);
+      await loadHotspotData();
+      await refreshComplaints();
+    } catch (err) {
+      console.error('Scan error:', err);
+    } finally {
+      setIsScanningHotspots(false);
+    }
+  };
+
+  const handleOpenActionModal = (h: RecurringIssueHotspot) => {
+    setSelectedHotspotForAction(h);
+    setActionModalStatus(h.status);
+    setActionModalProposedPlan(h.preventiveActionPlan?.proposedAction || '');
+    setActionModalDept(h.preventiveActionPlan?.responsibleDepartment || h.departmentName || '');
+    setActionModalBudget(h.preventiveActionPlan?.budgetEstimated ? String(h.preventiveActionPlan.budgetEstimated) : '');
+    setActionModalNotes('');
+  };
+
+  const handleSaveHotspotAction = async () => {
+    if (!selectedHotspotForAction) return;
+    try {
+      setIsSubmittingAction(true);
+      await updateHotspotStatusApi(selectedHotspotForAction._id, {
+        status: actionModalStatus,
+        proposedAction: actionModalProposedPlan,
+        responsibleDepartment: actionModalDept,
+        budgetEstimated: actionModalBudget ? Number(actionModalBudget) : undefined,
+        notes: actionModalNotes,
+      });
+      setSelectedHotspotForAction(null);
+      await loadHotspotData();
+    } catch (err) {
+      console.error('Failed to update hotspot:', err);
+    } finally {
+      setIsSubmittingAction(false);
+    }
+  };
 
   // Key KPI Metrics (Municipality-wide)
   const metrics = useMemo(() => {
@@ -156,7 +323,7 @@ export const AdminDashboard: React.FC = () => {
   const allWards = useMemo(() => {
     const wards = new Set<string>();
     complaints.forEach((c) => {
-      if (c.location.ward) wards.add(c.location.ward);
+      if (c.location?.ward) wards.add(c.location.ward);
     });
     return Array.from(wards);
   }, [complaints]);
@@ -167,22 +334,22 @@ export const AdminDashboard: React.FC = () => {
       // Search
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchesId = c.id.toLowerCase().includes(q);
-        const matchesDesc = c.description.toLowerCase().includes(q);
-        const matchesAddr = c.location.address.toLowerCase().includes(q);
-        const matchesCategory = c.category.toLowerCase().includes(q);
+        const matchesId = (c.id || '').toLowerCase().includes(q);
+        const matchesDesc = (c.description || '').toLowerCase().includes(q);
+        const matchesAddr = (c.location?.address || '').toLowerCase().includes(q);
+        const matchesCategory = (c.category || '').toLowerCase().includes(q);
         if (!matchesId && !matchesDesc && !matchesAddr && !matchesCategory) {
           return false;
         }
       }
 
       // Status
-      if (statusFilter !== 'all' && c.status.toLowerCase() !== statusFilter.toLowerCase()) {
+      if (statusFilter !== 'all' && (c.status || '').toLowerCase() !== statusFilter.toLowerCase()) {
         return false;
       }
 
       // Priority
-      if (priorityFilter !== 'all' && c.priority.toLowerCase() !== priorityFilter.toLowerCase()) {
+      if (priorityFilter !== 'all' && (c.priority || '').toLowerCase() !== priorityFilter.toLowerCase()) {
         return false;
       }
 
@@ -197,7 +364,7 @@ export const AdminDashboard: React.FC = () => {
       }
 
       // Ward
-      if (wardFilter !== 'all' && c.location.ward !== wardFilter) {
+      if (wardFilter !== 'all' && c.location?.ward !== wardFilter) {
         return false;
       }
 
@@ -223,8 +390,39 @@ export const AdminDashboard: React.FC = () => {
     setSelectedComplaintForAssign(null);
   };
 
+  const handleApproveRouting = async (
+    id: string,
+    payload: {
+      action: 'approve' | 'reject' | 'request_clarification';
+      primaryDepartment?: { departmentName: string; description?: string };
+      supportingDepartments?: Array<{ departmentName: string; reason?: string }>;
+      priority?: string;
+      adminNotes?: string;
+      rejectionReason?: string;
+    }
+  ) => {
+    try {
+      await approveComplaintApi(id, payload);
+      await refreshComplaints();
+    } catch (err) {
+      console.error('Failed to approve complaint routing:', err);
+    }
+    setSelectedComplaintForAssign(null);
+  };
+
   const handleEscalateSubmit = (id: string, reason: string) => {
     adminEscalateComplaint(id, reason);
+  };
+
+  const handleCloseComplaint = async (complaintId: string) => {
+    if (!window.confirm(`Perform official municipal closure for ticket ${complaintId}?`)) return;
+    try {
+      await closeComplaintApi(complaintId);
+      await refreshComplaints();
+      alert(`Complaint ${complaintId} has been officially closed.`);
+    } catch (err: any) {
+      alert(err.message || 'Cannot close complaint: Department tasks may still be pending.');
+    }
   };
 
   const handleViewOnMap = (complaint: Complaint) => {
@@ -361,26 +559,51 @@ export const AdminDashboard: React.FC = () => {
                 </span>
               )}
             </button>
+
+            {/* 7. Knowledge & SOPs (M8) */}
+            <button
+              type="button"
+              onClick={() => setActiveTab('knowledge')}
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl transition cursor-pointer ${
+                activeTab === 'knowledge'
+                  ? 'bg-sky-600 text-white shadow-md shadow-sky-600/20'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <BookOpen className="w-4 h-4" />
+              <span>Knowledge / SOPs</span>
+            </button>
           </nav>
         </div>
 
-        {/* Sidebar Footer & Role Switchers */}
-        <div className="p-4 border-t border-slate-800/80 space-y-2">
-          <Link
-            to="/officer"
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-xl text-xs font-bold transition border border-amber-500/30"
-          >
-            <Wrench className="w-4 h-4 text-amber-400" />
-            <span>Officer Portal</span>
-          </Link>
+        {/* Authenticated Admin Session & Sign Out */}
+        <div className="p-3 border-t border-slate-800/80 space-y-2">
+          <div className="flex items-center gap-2.5 p-2 rounded-xl bg-slate-800/60 border border-slate-700/60 text-white">
+            <div className="w-8 h-8 rounded-lg bg-sky-500/20 border border-sky-400/30 flex items-center justify-center text-sky-400 flex-shrink-0">
+              <Shield className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold text-slate-100 truncate">
+                {user?.name || 'Administrator'}
+              </p>
+              <p className="text-[10px] text-slate-400 truncate capitalize">
+                {user?.designation || 'Central Admin'}
+              </p>
+            </div>
+          </div>
 
-          <Link
-            to="/"
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-semibold transition"
+          <button
+            type="button"
+            onClick={() => {
+              logout();
+              navigate('/login');
+            }}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 hover:text-rose-200 rounded-xl text-xs font-bold transition border border-rose-500/20 cursor-pointer"
+            title="Sign Out of Central Admin Portal"
           >
-            <Home className="w-3.5 h-3.5" />
-            <span>Citizen Portal</span>
-          </Link>
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sign Out</span>
+          </button>
         </div>
       </aside>
 
@@ -405,6 +628,16 @@ export const AdminDashboard: React.FC = () => {
           <div className="flex items-center gap-3">
             <button
               type="button"
+              onClick={() => setIsStaffModalOpen(true)}
+              className="px-3.5 py-2 bg-gradient-to-r from-slate-900 to-indigo-900 hover:from-slate-800 hover:to-indigo-800 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 transition shadow-sm cursor-pointer"
+              title="Provision Department Staff Account"
+            >
+              <UserPlus className="w-3.5 h-3.5 text-indigo-300" />
+              <span>Provision Staff</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => refreshComplaints()}
               disabled={isLoading}
               className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
@@ -418,6 +651,11 @@ export const AdminDashboard: React.FC = () => {
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
               Live Feed
             </span>
+
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-xl text-xs font-bold text-slate-800 border border-slate-200">
+              <Shield className="w-3.5 h-3.5 text-sky-600" />
+              <span>{user?.name || 'Central Admin'}</span>
+            </div>
           </div>
         </header>
 
@@ -621,7 +859,7 @@ export const AdminDashboard: React.FC = () => {
                         <tr key={comp.id} className="hover:bg-slate-50 transition">
                           <td className="py-3 font-bold text-slate-900 font-mono">{comp.id}</td>
                           <td className="py-3 font-semibold text-slate-800">{comp.category}</td>
-                          <td className="py-3 text-slate-600 max-w-[180px] truncate">{comp.location.address}</td>
+                          <td className="py-3 text-slate-600 max-w-[180px] truncate">{comp.location?.address || 'N/A'}</td>
                           <td className="py-3">
                             <PriorityBadge priority={comp.priority} size="sm" />
                           </td>
@@ -631,7 +869,16 @@ export const AdminDashboard: React.FC = () => {
                               {comp.status}
                             </span>
                           </td>
-                          <td className="py-3 text-right">
+                          <td className="py-3 text-right space-x-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenChatModal(comp)}
+                              className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl transition cursor-pointer text-xs border border-indigo-200 inline-flex items-center gap-1"
+                              title="Department Oversight Chat"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>Chat</span>
+                            </button>
                             <button
                               type="button"
                               onClick={() => setSelectedComplaintForAssign(comp)}
@@ -791,9 +1038,9 @@ export const AdminDashboard: React.FC = () => {
                             </div>
                           </td>
                           <td className="py-3.5 max-w-[180px] truncate text-slate-600">
-                            <span className="truncate block">{comp.location.address}</span>
+                            <span className="truncate block">{comp.location?.address || 'N/A'}</span>
                             <span className="text-[10px] text-slate-400 font-semibold">
-                              {comp.location.ward || 'Ward 102'}
+                              {comp.location?.ward || 'Ward 102'}
                             </span>
                           </td>
                           <td className="py-3.5">
@@ -831,6 +1078,17 @@ export const AdminDashboard: React.FC = () => {
                             </select>
                           </td>
                           <td className="py-3.5 text-right space-x-1.5">
+                            {comp.status === 'Resolved' && (
+                              <button
+                                type="button"
+                                onClick={() => handleCloseComplaint(comp.id)}
+                                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs transition cursor-pointer text-xs inline-flex items-center gap-1"
+                                title="Finalize official municipal closure"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>Close Ticket</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => handleViewOnMap(comp)}
@@ -839,6 +1097,15 @@ export const AdminDashboard: React.FC = () => {
                             >
                               <MapIcon className="w-3.5 h-3.5 inline mr-1" />
                               Map
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenChatModal(comp)}
+                              className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl transition cursor-pointer text-xs border border-indigo-200 inline-flex items-center gap-1"
+                              title="Open Department Oversight Chat"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>Chat</span>
                             </button>
                             <button
                               type="button"
@@ -893,14 +1160,320 @@ export const AdminDashboard: React.FC = () => {
           )}
 
           {/* ==================================================== */}
-          {/* TAB 4: HOTSPOT MAP (DBSCAN)                          */}
+          {/* TAB 4: HOTSPOT MAP & RECURRING ISSUES (M11)          */}
           {/* ==================================================== */}
           {activeTab === 'hotspot-map' && (
-            <HotspotMap
-              complaints={complaints}
-              focusedComplaint={focusedMapComplaint}
-              onSelectComplaint={(c) => setSelectedComplaintForAssign(c)}
-            />
+            <div className="space-y-6">
+              {/* Hotspots Control & Scan Bar */}
+              <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1.5 bg-rose-100 text-rose-700 rounded-lg">
+                      <Flame className="w-5 h-5" />
+                    </span>
+                    <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                      Module 11 – Recurring Issue and Hotspot Detection
+                    </h2>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Density-based spatial clustering (DBSCAN) and temporal trend analysis for preventive municipal action.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Observation Window Selector */}
+                  <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
+                    <span className="text-slate-400 font-semibold">Window:</span>
+                    <select
+                      value={hotspotObservationWindow}
+                      onChange={(e) => setHotspotObservationWindow(Number(e.target.value))}
+                      className="bg-transparent font-bold text-slate-800 outline-none cursor-pointer"
+                    >
+                      <option value={7}>7 Days</option>
+                      <option value={30}>30 Days (Default)</option>
+                      <option value={90}>90 Days</option>
+                    </select>
+                  </div>
+
+                  {/* Status Filter */}
+                  <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
+                    <span className="text-slate-400 font-semibold">Status:</span>
+                    <select
+                      value={hotspotStatusFilter}
+                      onChange={(e) => setHotspotStatusFilter(e.target.value)}
+                      className="bg-transparent font-bold text-slate-800 outline-none cursor-pointer"
+                    >
+                      <option value="all">All Statuses</option>
+                      <option value="DETECTED">Detected</option>
+                      <option value="UNDER_REVIEW">Under Review</option>
+                      <option value="ACTION_PLANNED">Action Planned</option>
+                      <option value="MONITORING">Monitoring</option>
+                      <option value="RESOLVED">Resolved</option>
+                      <option value="REOPENED">Reopened</option>
+                    </select>
+                  </div>
+
+                  {/* Category Filter */}
+                  <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
+                    <span className="text-slate-400 font-semibold">Category:</span>
+                    <select
+                      value={hotspotCategoryFilter}
+                      onChange={(e) => setHotspotCategoryFilter(e.target.value)}
+                      className="bg-transparent font-bold text-slate-800 outline-none cursor-pointer"
+                    >
+                      <option value="all">All Categories</option>
+                      <option value="Pothole">Pothole</option>
+                      <option value="Water Supply">Water Supply</option>
+                      <option value="Drainage">Drainage</option>
+                      <option value="Streetlight">Streetlight</option>
+                      <option value="Garbage">Garbage</option>
+                      <option value="Traffic">Traffic</option>
+                    </select>
+                  </div>
+
+                  {/* Trigger DBSCAN Municipality Scan Button */}
+                  <button
+                    type="button"
+                    disabled={isScanningHotspots}
+                    onClick={handleTriggerScan}
+                    className="px-4 py-2 bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer active:scale-95"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isScanningHotspots ? 'animate-spin' : ''}`} />
+                    <span>{isScanningHotspots ? 'Running DBSCAN Scan...' : 'Scan Municipality Hotspots'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Hotspot KPI Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider">Total Hotspots</span>
+                    <Flame className="w-4 h-4 text-slate-600" />
+                  </div>
+                  <div className="text-2xl font-black text-slate-900">
+                    {hotspotMetrics?.totalHotspots ?? serverHotspots.length}
+                  </div>
+                </div>
+
+                <div className="bg-white p-4 rounded-2xl border border-rose-200 bg-rose-50/20 shadow-xs space-y-1">
+                  <div className="flex items-center justify-between text-rose-600">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider">Active Hotspots</span>
+                    <AlertCircle className="w-4 h-4 text-rose-600" />
+                  </div>
+                  <div className="text-2xl font-black text-rose-800">
+                    {hotspotMetrics?.activeHotspots ?? serverHotspots.filter((h) => h.status !== 'RESOLVED').length}
+                  </div>
+                </div>
+
+                <div className="bg-white p-4 rounded-2xl border border-amber-200 bg-amber-50/20 shadow-xs space-y-1">
+                  <div className="flex items-center justify-between text-amber-600">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider">Under Review</span>
+                    <Clock className="w-4 h-4 text-amber-600" />
+                  </div>
+                  <div className="text-2xl font-black text-amber-800">
+                    {hotspotMetrics?.underReviewHotspots ?? serverHotspots.filter((h) => h.status === 'UNDER_REVIEW').length}
+                  </div>
+                </div>
+
+                <div className="bg-white p-4 rounded-2xl border border-indigo-200 bg-indigo-50/20 shadow-xs space-y-1">
+                  <div className="flex items-center justify-between text-indigo-600">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider">Increasing Trend</span>
+                    <TrendingUp className="w-4 h-4 text-indigo-600" />
+                  </div>
+                  <div className="text-2xl font-black text-indigo-800">
+                    {hotspotMetrics?.increasingHotspots ?? serverHotspots.filter((h) => h.temporalTrend?.classification === 'INCREASING').length}
+                  </div>
+                </div>
+              </div>
+
+              {/* Scan Result Feedback Banner */}
+              {hotspotScanResult && (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3 text-xs text-emerald-900">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>
+                      DBSCAN Scan complete: Scanned <strong>{hotspotScanResult.scanned}</strong> complaints across municipality. Detected <strong>{hotspotScanResult.clustersFound}</strong> clusters; updated/created <strong>{hotspotScanResult.hotspotsCreatedOrUpdated}</strong> persistent hotspot records.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setHotspotScanResult(null)}
+                    className="text-emerald-700 hover:text-emerald-900 font-bold"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
+              {/* Hotspot Map with Server Hotspots and Live Complaints */}
+              <HotspotMap
+                complaints={complaints}
+                serverHotspots={serverHotspots}
+                focusedComplaint={focusedMapComplaint}
+                focusedHotspot={focusedHotspot}
+                onSelectComplaint={(c) => setSelectedComplaintForAssign(c)}
+                onSelectHotspot={handleOpenActionModal}
+              />
+
+              {/* Hotspots Detailed Registry Table */}
+              <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                  <div>
+                    <h3 className="font-extrabold text-slate-900 text-base">
+                      Persistent Recurring Issues & Hotspot Registry
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Administrative record of verified spatial clusters with preventive municipal action plans.
+                    </p>
+                  </div>
+                  <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-xl self-start sm:self-auto">
+                    {serverHotspots.length} Hotspot(s) Listed
+                  </span>
+                </div>
+
+                {hotspotsLoading ? (
+                  <div className="py-12 text-center text-slate-400 text-xs">
+                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-rose-500" />
+                    <span>Loading municipal hotspots...</span>
+                  </div>
+                ) : serverHotspots.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400 text-xs space-y-2">
+                    <Flame className="w-8 h-8 text-slate-300 mx-auto" />
+                    <p className="font-bold text-slate-600">No Hotspots Match the Current Filters</p>
+                    <p>Click "Scan Municipality Hotspots" above to run DBSCAN clustering on recent complaints.</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-100 text-slate-400 font-bold text-[10px] uppercase">
+                          <th className="pb-3">Hotspot ID</th>
+                          <th className="pb-3">Category</th>
+                          <th className="pb-3">Ward & Radius</th>
+                          <th className="pb-3">Complaints</th>
+                          <th className="pb-3">Temporal Trend</th>
+                          <th className="pb-3">Lifecycle Status</th>
+                          <th className="pb-3">Preventive Action Plan</th>
+                          <th className="pb-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {serverHotspots.map((h) => {
+                          const trend = h.temporalTrend?.classification;
+                          return (
+                            <tr key={h._id} className="hover:bg-slate-50/60 transition">
+                              <td className="py-3 font-bold text-slate-900">
+                                <span>{h.hotspotId || `HOT-${h._id.slice(-6).toUpperCase()}`}</span>
+                              </td>
+                              <td className="py-3 font-semibold text-slate-800">
+                                <div className="flex items-center gap-1.5">
+                                  <CategoryIcon category={h.category as any} className="w-4 h-4" />
+                                  <span>{h.category}</span>
+                                </div>
+                                {h.subcategory && (
+                                  <span className="text-[10px] text-slate-400 font-normal block">
+                                    {h.subcategory}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 text-slate-600 max-w-[160px]">
+                                <span className="truncate block font-semibold">
+                                  {h.location?.ward || 'Municipal Ward'}
+                                </span>
+                                <span className="text-[10px] text-slate-400 block truncate">
+                                  Radius: {h.location?.radiusMeters ?? 100}m
+                                </span>
+                              </td>
+                              <td className="py-3">
+                                <span className="font-extrabold text-slate-900 bg-slate-100 px-2 py-0.5 rounded-full">
+                                  {h.complaintCount} in cluster
+                                </span>
+                              </td>
+                              <td className="py-3">
+                                <span
+                                  className={`inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                                    trend === 'INCREASING'
+                                      ? 'bg-rose-100 text-rose-800'
+                                      : trend === 'DECREASING'
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : trend === 'STABLE'
+                                      ? 'bg-slate-100 text-slate-700'
+                                      : 'bg-amber-50 text-amber-700'
+                                  }`}
+                                >
+                                  {trend === 'INCREASING' && <TrendingUp className="w-3 h-3 text-rose-600" />}
+                                  {trend === 'DECREASING' && <TrendingDown className="w-3 h-3 text-emerald-600" />}
+                                  {trend === 'STABLE' && <Minus className="w-3 h-3 text-slate-500" />}
+                                  {trend || 'STABLE'}
+                                  {h.temporalTrend?.percentageChange ? ` (${h.temporalTrend.percentageChange > 0 ? '+' : ''}${h.temporalTrend.percentageChange}%)` : ''}
+                                </span>
+                              </td>
+                              <td className="py-3">
+                                <span
+                                  className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
+                                    h.status === 'RESOLVED'
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : h.status === 'ACTION_PLANNED'
+                                      ? 'bg-indigo-100 text-indigo-800'
+                                      : h.status === 'UNDER_REVIEW'
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : h.status === 'MONITORING'
+                                      ? 'bg-sky-100 text-sky-800'
+                                      : 'bg-rose-100 text-rose-800'
+                                  }`}
+                                >
+                                  {h.status}
+                                </span>
+                              </td>
+                              <td className="py-3 max-w-[200px]">
+                                {h.preventiveActionPlan?.proposedAction ? (
+                                  <div className="space-y-0.5">
+                                    <p className="text-slate-800 font-semibold truncate text-[11px]">
+                                      {h.preventiveActionPlan.proposedAction}
+                                    </p>
+                                    {h.preventiveActionPlan.responsibleDepartment && (
+                                      <p className="text-[10px] text-slate-400">
+                                        Dept: {h.preventiveActionPlan.responsibleDepartment}
+                                      </p>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400 italic text-[11px]">No action plan set</span>
+                                )}
+                              </td>
+                              <td className="py-3 text-right space-x-1.5 whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setFocusedHotspot(h);
+                                    window.scrollTo({ top: 400, behavior: 'smooth' });
+                                  }}
+                                  className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition cursor-pointer text-xs"
+                                  title="View centroid on map"
+                                >
+                                  <MapIcon className="w-3.5 h-3.5 inline mr-1" />
+                                  Map
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenActionModal(h)}
+                                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-xs transition cursor-pointer text-xs"
+                                  title="Update status & action plan"
+                                >
+                                  <Wrench className="w-3.5 h-3.5 inline mr-1" />
+                                  Manage Plan
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
 
           {/* ==================================================== */}
@@ -924,6 +1497,170 @@ export const AdminDashboard: React.FC = () => {
               onSendNotice={(id, msg) => adminSendNotice(id, msg)}
             />
           )}
+
+          {/* ==================================================== */}
+          {/* TAB 7: KNOWLEDGE & MUNICIPAL SOPS (M8)              */}
+          {/* ==================================================== */}
+          {activeTab === 'knowledge' && (
+            <div className="space-y-6">
+              {/* Header Card */}
+              <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-0.5 text-[10px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200/60 rounded-md">
+                      Module 8 (RAG)
+                    </span>
+                    <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                      Standard Operating Procedures (SOPs) & Knowledge Base
+                    </h2>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Manage official engineering manuals, SLA guidelines, and procedural documentation for RAG grounding.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleReindexKnowledge}
+                  disabled={isReindexing}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition inline-flex items-center gap-1.5 shadow-sm shadow-indigo-600/20 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isReindexing ? 'animate-spin' : ''}`} />
+                  <span>{isReindexing ? 'Re-indexing Chunks...' : 'Re-index All SOP Chunks'}</span>
+                </button>
+              </div>
+
+              {reindexMessage && (
+                <div className="p-3.5 rounded-2xl bg-indigo-50 border border-indigo-200 text-xs font-semibold text-indigo-900 flex items-center justify-between">
+                  <span>{reindexMessage}</span>
+                  <button onClick={() => setReindexMessage(null)} className="text-indigo-500 hover:text-indigo-800">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {/* Filters */}
+              <div className="bg-white rounded-3xl p-4 border border-slate-200/80 shadow-xs flex flex-col sm:flex-row gap-3">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={knowledgeSearch}
+                    onChange={(e) => setKnowledgeSearch(e.target.value)}
+                    placeholder="Search documents by title, keyword, or manual code..."
+                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+                  />
+                </div>
+
+                <select
+                  value={knowledgeDeptFilter}
+                  onChange={(e) => setKnowledgeDeptFilter(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 text-slate-700 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none"
+                >
+                  <option value="all">All Departments</option>
+                  {CORE_DEPARTMENTS.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Document Registry Table */}
+              <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-extrabold text-sm text-slate-900">
+                    Registered Knowledge Documents ({knowledgeDocs.length})
+                  </h3>
+                </div>
+
+                {knowledgeLoading ? (
+                  <div className="py-12 text-center text-slate-400 text-xs">
+                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-600" />
+                    Loading official knowledge documents...
+                  </div>
+                ) : knowledgeDocs.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400 text-xs">
+                    No knowledge documents found matching the filter criteria.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="text-slate-400 uppercase text-[10px] font-bold border-b border-slate-100">
+                          <th className="pb-3">Doc Code & Title</th>
+                          <th className="pb-3">Department & Category</th>
+                          <th className="pb-3">Type & Version</th>
+                          <th className="pb-3">Status</th>
+                          <th className="pb-3">Chunks</th>
+                          <th className="pb-3">Source Citation</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {knowledgeDocs.map((doc: any) => (
+                          <tr key={doc._id} className="hover:bg-slate-50/80 transition">
+                            <td className="py-3.5 pr-3">
+                              <span className="font-mono text-[10px] text-slate-400 block font-bold">
+                                {doc.code || 'SOP-DOC'}
+                              </span>
+                              <span className="font-bold text-slate-900 block">{doc.title}</span>
+                              {doc.description && (
+                                <span className="text-[11px] text-slate-500 line-clamp-1">
+                                  {doc.description}
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3.5 pr-3">
+                              <span className="font-semibold text-slate-800 block">{doc.department}</span>
+                              <span className="text-[10px] text-slate-400">
+                                {doc.applicableCategories?.join(', ') || 'All categories'}
+                              </span>
+                            </td>
+                            <td className="py-3.5 pr-3">
+                              <span className="font-bold uppercase text-[10px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700">
+                                {doc.documentType || 'SOP'}
+                              </span>
+                              <span className="text-[10px] text-slate-400 block mt-0.5">
+                                v{doc.version || '1.0'}
+                              </span>
+                            </td>
+                            <td className="py-3.5 pr-3">
+                              <div className="flex flex-col gap-1">
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block w-fit ${
+                                    doc.approvalStatus === 'approved'
+                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                      : 'bg-amber-50 text-amber-700 border border-amber-200'
+                                  }`}
+                                >
+                                  {doc.approvalStatus === 'approved' ? '✓ Approved' : 'Draft'}
+                                </span>
+                                <span
+                                  className={`text-[9px] font-bold px-1.5 py-0.2 rounded w-fit ${
+                                    doc.active
+                                      ? 'bg-sky-50 text-sky-700'
+                                      : 'bg-slate-100 text-slate-500'
+                                  }`}
+                                >
+                                  {doc.active ? 'Active' : 'Inactive'}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-3.5 pr-3 font-mono font-bold text-slate-700">
+                              {doc.chunkCount || doc.chunks?.length || 3} chunks
+                            </td>
+                            <td className="py-3.5 text-slate-500 text-[11px] max-w-[200px] truncate">
+                              {doc.source || 'Municipal Engineering Manual'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </main>
 
@@ -934,7 +1671,164 @@ export const AdminDashboard: React.FC = () => {
           onClose={() => setSelectedComplaintForAssign(null)}
           onAssign={handleAssignSubmit}
           onEscalate={handleEscalateSubmit}
+          onApproveRouting={handleApproveRouting}
         />
+      )}
+
+      {/* Official Citizen-Department Oversight Chat Modal */}
+      {isChatModalOpen && selectedComplaintForChat && (
+        <AdminOfficialChatModal
+          isOpen={isChatModalOpen}
+          complaint={selectedComplaintForChat}
+          onClose={() => {
+            setIsChatModalOpen(false);
+            setSelectedComplaintForChat(null);
+          }}
+        />
+      )}
+
+      {/* Staff Provisioning Modal */}
+      <StaffProvisionModal
+        isOpen={isStaffModalOpen}
+        onClose={() => setIsStaffModalOpen(false)}
+      />
+
+      {/* Hotspot Preventive Action & Status Transition Modal */}
+      {selectedHotspotForAction && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-6 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+              <div className="space-y-0.5">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-600 block">
+                  Municipal Action Plan
+                </span>
+                <h3 className="text-base font-extrabold text-slate-900">
+                  Manage Hotspot: {selectedHotspotForAction.hotspotId || 'M11 Hotspot'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedHotspotForAction(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200/60 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4 text-xs">
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-700">
+                    {selectedHotspotForAction.category} • {selectedHotspotForAction.location?.ward || 'Ward'}
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-500">
+                    {selectedHotspotForAction.complaintCount} Complaints in Cluster
+                  </span>
+                </div>
+                <p className="text-slate-500 text-[11px] truncate">
+                  {selectedHotspotForAction.location?.address || 'N/A'}
+                </p>
+              </div>
+
+              {/* Status Selector */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Lifecycle Status</label>
+                <select
+                  value={actionModalStatus}
+                  onChange={(e) => setActionModalStatus(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-slate-200 bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                >
+                  <option value="DETECTED">DETECTED – Newly flagged cluster</option>
+                  <option value="UNDER_REVIEW">UNDER_REVIEW – Engineering review in progress</option>
+                  <option value="ACTION_PLANNED">ACTION_PLANNED – Preventive municipal work drafted</option>
+                  <option value="MONITORING">MONITORING – Preventive action ongoing / post-repair monitoring</option>
+                  <option value="RESOLVED">RESOLVED – Underlying civic issue fully addressed</option>
+                  <option value="REOPENED">REOPENED – Recurrence observed after resolution</option>
+                </select>
+              </div>
+
+              {/* Proposed Preventive Action */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Proposed Preventive Action</label>
+                <textarea
+                  value={actionModalProposedPlan}
+                  onChange={(e) => setActionModalProposedPlan(e.target.value)}
+                  rows={3}
+                  placeholder="e.g. Resurface 400m road stretch with bituminous concrete; replace faulty stormwater drainage valve..."
+                  className="w-full p-2.5 rounded-xl border border-slate-200 text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+
+              {/* Responsible Department & Budget */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">Responsible Department</label>
+                  <select
+                    value={actionModalDept}
+                    onChange={(e) => setActionModalDept(e.target.value)}
+                    className="w-full p-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  >
+                    <option value="">Select Department...</option>
+                    {CORE_DEPARTMENTS.map((dept) => (
+                      <option key={dept} value={dept}>
+                        {dept}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">Estimated Budget (₹)</label>
+                  <input
+                    type="number"
+                    value={actionModalBudget}
+                    onChange={(e) => setActionModalBudget(e.target.value)}
+                    placeholder="e.g. 50000"
+                    className="w-full p-2 rounded-xl border border-slate-200 text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  />
+                </div>
+              </div>
+
+              {/* Administrative Audit Note */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Administrative Note (Audit Trail)</label>
+                <input
+                  type="text"
+                  value={actionModalNotes}
+                  onChange={(e) => setActionModalNotes(e.target.value)}
+                  placeholder="Reason for status change or update notes..."
+                  className="w-full p-2 rounded-xl border border-slate-200 text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setSelectedHotspotForAction(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSubmittingAction}
+                onClick={handleSaveHotspotAction}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-extrabold rounded-xl shadow-md transition text-xs flex items-center gap-1.5 cursor-pointer"
+              >
+                {isSubmittingAction ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Check className="w-3.5 h-3.5" />
+                )}
+                <span>Save Action Plan & Status</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

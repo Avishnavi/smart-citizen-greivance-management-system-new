@@ -1,13 +1,17 @@
 import React, { useState, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import type { Complaint } from '../../types';
+import type { Complaint, RecurringIssueHotspot } from '../../types';
 import { runDBSCAN } from '../../utils/dbscan';
 import {
   Flame,
   Layers,
   Eye,
   Info,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Wrench,
 } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
 
@@ -71,20 +75,36 @@ function MapRecenter({ center }: { center: [number, number] }) {
   return null;
 }
 
+const STATUS_COLOR_CONFIG: Record<string, { stroke: string; fill: string }> = {
+  DETECTED: { stroke: '#e11d48', fill: '#f43f5e' },
+  UNDER_REVIEW: { stroke: '#f59e0b', fill: '#fbbf24' },
+  ACTION_PLANNED: { stroke: '#6366f1', fill: '#818cf8' },
+  MONITORING: { stroke: '#0284c7', fill: '#38bdf8' },
+  RESOLVED: { stroke: '#10b981', fill: '#34d399' },
+  REOPENED: { stroke: '#dc2626', fill: '#ef4444' },
+};
+
 interface HotspotMapProps {
   complaints: Complaint[];
+  serverHotspots?: RecurringIssueHotspot[];
   onSelectComplaint?: (complaint: Complaint) => void;
+  onSelectHotspot?: (hotspot: RecurringIssueHotspot) => void;
   focusedComplaint?: Complaint | null;
+  focusedHotspot?: RecurringIssueHotspot | null;
 }
 
 export const HotspotMap: React.FC<HotspotMapProps> = ({
   complaints,
+  serverHotspots = [],
   onSelectComplaint,
+  onSelectHotspot,
   focusedComplaint,
+  focusedHotspot,
 }) => {
   const [epsilon, setEpsilon] = useState<number>(600); // 600 meters
   const [minPts, setMinPts] = useState<number>(2); // 2 complaints
   const [showHotspots, setShowHotspots] = useState<boolean>(true);
+  const [showServerHotspots, setShowServerHotspots] = useState<boolean>(true);
   const [filterPriority, setFilterPriority] = useState<string>('all');
 
   // Filter complaints
@@ -98,16 +118,22 @@ export const HotspotMap: React.FC<HotspotMapProps> = ({
     return runDBSCAN(filteredComplaints, epsilon, minPts);
   }, [filteredComplaints, epsilon, minPts]);
 
-  // Default Map center: use focused complaint or first complaint or Anna Nagar, Chennai
+  // Default Map center: use focused hotspot or focused complaint or first complaint or Anna Nagar, Chennai
   const mapCenter: [number, number] = useMemo(() => {
+    if (focusedHotspot?.location?.latitude && focusedHotspot?.location?.longitude) {
+      return [focusedHotspot.location.latitude, focusedHotspot.location.longitude];
+    }
     if (focusedComplaint?.location) {
       return [focusedComplaint.location.latitude, focusedComplaint.location.longitude];
+    }
+    if (serverHotspots.length > 0 && serverHotspots[0].location?.latitude) {
+      return [serverHotspots[0].location.latitude, serverHotspots[0].location.longitude];
     }
     if (complaints.length > 0 && complaints[0].location) {
       return [complaints[0].location.latitude, complaints[0].location.longitude];
     }
     return [13.085, 80.2101];
-  }, [focusedComplaint, complaints]);
+  }, [focusedHotspot, focusedComplaint, serverHotspots, complaints]);
 
   return (
     <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col space-y-4 p-4 sm:p-6">
@@ -134,15 +160,28 @@ export const HotspotMap: React.FC<HotspotMapProps> = ({
           {/* Toggle Hotspot Circles */}
           <button
             type="button"
-            onClick={() => setShowHotspots((prev) => !prev)}
+            onClick={() => setShowServerHotspots((prev) => !prev)}
             className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition cursor-pointer ${
-              showHotspots
+              showServerHotspots
                 ? 'bg-rose-50 text-rose-700 border border-rose-200'
                 : 'bg-slate-100 text-slate-600 border border-slate-200'
             }`}
           >
+            <Flame className="w-3.5 h-3.5" />
+            <span>Hotspots: {showServerHotspots ? `ON (${serverHotspots.length})` : 'OFF'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowHotspots((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition cursor-pointer ${
+              showHotspots
+                ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                : 'bg-slate-100 text-slate-600 border border-slate-200'
+            }`}
+          >
             <Layers className="w-3.5 h-3.5" />
-            <span>Hotspot Layers: {showHotspots ? 'ON' : 'OFF'}</span>
+            <span>Live Clusters: {showHotspots ? 'ON' : 'OFF'}</span>
           </button>
 
           {/* Epsilon (Neighborhood Distance) */}
@@ -233,6 +272,131 @@ export const HotspotMap: React.FC<HotspotMapProps> = ({
           />
 
           <MapRecenter center={mapCenter} />
+
+          {/* Render Server-Persisted Hotspots */}
+          {showServerHotspots &&
+            serverHotspots
+              .filter((h) => h.location?.latitude && h.location?.longitude)
+              .map((hotspot) => {
+                const colors = STATUS_COLOR_CONFIG[hotspot.status] || { stroke: '#e11d48', fill: '#f43f5e' };
+                const trend = hotspot.temporalTrend?.classification;
+
+                return (
+                  <React.Fragment key={`server-hotspot-${hotspot._id}`}>
+                    <Circle
+                      center={[hotspot.location.latitude, hotspot.location.longitude]}
+                      radius={hotspot.location.radiusMeters || 500}
+                      pathOptions={{
+                        color: colors.stroke,
+                        fillColor: colors.fill,
+                        fillOpacity: 0.28,
+                        weight: 3,
+                        dashArray: hotspot.status === 'RESOLVED' ? undefined : '5, 5',
+                      }}
+                    >
+                      <Popup>
+                        <div className="p-2.5 text-xs space-y-2 min-w-[240px]">
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                            <div className="flex items-center gap-1.5 font-bold text-slate-900">
+                              <Flame className="w-4 h-4 text-rose-600" />
+                              <span>{hotspot.hotspotId || 'M11 Hotspot'}</span>
+                            </div>
+                            <span
+                              className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase ${
+                                hotspot.status === 'RESOLVED'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : hotspot.status === 'ACTION_PLANNED'
+                                  ? 'bg-indigo-100 text-indigo-800'
+                                  : hotspot.status === 'UNDER_REVIEW'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : hotspot.status === 'MONITORING'
+                                  ? 'bg-sky-100 text-sky-800'
+                                  : 'bg-rose-100 text-rose-800'
+                              }`}
+                            >
+                              {hotspot.status}
+                            </span>
+                          </div>
+
+                          <div className="space-y-1 text-slate-600 text-[11px]">
+                            <p>
+                              <strong className="text-slate-800">Category:</strong> {hotspot.category}
+                              {hotspot.subcategory ? ` (${hotspot.subcategory})` : ''}
+                            </p>
+                            <p>
+                              <strong className="text-slate-800">Location:</strong> {hotspot.location.address || 'Municipal Ward'}
+                              {hotspot.location.ward ? ` (${hotspot.location.ward})` : ''}
+                            </p>
+                            <p>
+                              <strong className="text-slate-800">Complaints in Cluster:</strong>{' '}
+                              <span className="font-extrabold text-slate-900">{hotspot.complaintCount}</span>
+                              <span className="text-slate-400"> (radius {hotspot.location.radiusMeters}m)</span>
+                            </p>
+                          </div>
+
+                          {/* Temporal Trend Indicator */}
+                          {hotspot.temporalTrend && (
+                            <div className="p-2 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-bold text-slate-500 uppercase">Temporal Trend:</span>
+                                <span
+                                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-1 ${
+                                    trend === 'INCREASING'
+                                      ? 'bg-rose-100 text-rose-800'
+                                      : trend === 'DECREASING'
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : trend === 'STABLE'
+                                      ? 'bg-slate-100 text-slate-700'
+                                      : 'bg-amber-50 text-amber-700'
+                                  }`}
+                                >
+                                  {trend === 'INCREASING' && <TrendingUp className="w-3 h-3 text-rose-600" />}
+                                  {trend === 'DECREASING' && <TrendingDown className="w-3 h-3 text-emerald-600" />}
+                                  {trend === 'STABLE' && <Minus className="w-3 h-3 text-slate-500" />}
+                                  {trend || 'STABLE'}
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-500">
+                                Current window: {hotspot.temporalTrend.currentPeriodCount} vs Prev: {hotspot.temporalTrend.previousPeriodCount}
+                                {hotspot.temporalTrend.percentageChange !== 0 && (
+                                  <span> ({hotspot.temporalTrend.percentageChange > 0 ? '+' : ''}{hotspot.temporalTrend.percentageChange}%)</span>
+                                )}
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Preventive Action Plan */}
+                          {hotspot.preventiveActionPlan?.proposedAction && (
+                            <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-100 text-[10px] text-indigo-900 space-y-0.5">
+                              <div className="font-bold flex items-center gap-1">
+                                <Wrench className="w-3 h-3" />
+                                <span>Preventive Plan:</span>
+                              </div>
+                              <p className="truncate">{hotspot.preventiveActionPlan.proposedAction}</p>
+                              {hotspot.preventiveActionPlan.responsibleDepartment && (
+                                <p className="text-indigo-600 font-semibold">
+                                  Dept: {hotspot.preventiveActionPlan.responsibleDepartment}
+                                </p>
+                              )}
+                            </div>
+                          )}
+
+                          {onSelectHotspot && (
+                            <button
+                              type="button"
+                              onClick={() => onSelectHotspot(hotspot)}
+                              className="w-full mt-1 px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-[11px] flex items-center justify-center gap-1 transition cursor-pointer"
+                            >
+                              <Wrench className="w-3 h-3" />
+                              <span>Manage Hotspot & Plan</span>
+                            </button>
+                          )}
+                        </div>
+                      </Popup>
+                    </Circle>
+                  </React.Fragment>
+                );
+              })}
 
           {/* Render DBSCAN Hotspot Circles */}
           {showHotspots &&
@@ -350,9 +514,15 @@ export const HotspotMap: React.FC<HotspotMapProps> = ({
               <span className="text-slate-600">Low</span>
             </div>
           </div>
-          <div className="flex items-center gap-2 pt-1 border-t border-slate-100 text-[10px] text-slate-500">
-            <span className="w-3 h-3 rounded-full border border-rose-500 bg-rose-200"></span>
-            <span>DBSCAN Density Cluster Area</span>
+          <div className="pt-1 border-t border-slate-100 text-[10px] text-slate-500 space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full border border-rose-500 bg-rose-200"></span>
+              <span>Active Hotspot (Detected/Action Planned)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full border border-emerald-500 bg-emerald-200"></span>
+              <span>Resolved Hotspot</span>
+            </div>
           </div>
         </div>
       </div>

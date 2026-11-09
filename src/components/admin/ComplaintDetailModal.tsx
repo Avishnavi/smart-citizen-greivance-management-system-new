@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import type { Complaint, Department, ComplaintStatus } from '../../types';
+import type { Complaint, Department, ComplaintStatus, KnowledgeGuidance } from '../../types';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { CategoryIcon } from '../common/CategoryIcon';
+import { KnowledgeGuidanceCard } from '../common/KnowledgeGuidanceCard';
+import { fetchComplaintKnowledge } from '../../services/knowledgeService';
+import { closeComplaintApi } from '../../services/complaintService';
 import { formatDateTime, formatDate, formatCompactDateTime } from '../../utils/dateUtils';
 import {
   X,
@@ -113,6 +116,37 @@ export const ComplaintDetailModal: React.FC<ComplaintDetailModalProps> = ({
   );
   const [isSaved, setIsSaved] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [knowledgeGuidance, setKnowledgeGuidance] = useState<KnowledgeGuidance | null>(null);
+  const [isKnowledgeLoading, setIsKnowledgeLoading] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+
+  const handleFinalClose = async () => {
+    if (!complaint) return;
+    if (!window.confirm(`Perform official municipal closure for complaint ${complaint.id}?`)) return;
+    setIsClosing(true);
+    try {
+      await closeComplaintApi(complaint.id);
+      alert(`Complaint ${complaint.id} closed successfully.`);
+      onClose();
+    } catch (err: any) {
+      alert(err.message || 'Cannot close complaint: Required department tasks may still be pending.');
+    } finally {
+      setIsClosing(false);
+    }
+  };
+
+  const loadComplaintKnowledge = async (complaintId: string) => {
+    setIsKnowledgeLoading(true);
+    try {
+      const guidance = await fetchComplaintKnowledge(complaintId);
+      setKnowledgeGuidance(guidance);
+    } catch (err) {
+      console.warn('Could not load knowledge for complaint:', err);
+      setKnowledgeGuidance(null);
+    } finally {
+      setIsKnowledgeLoading(false);
+    }
+  };
 
   // Sync state when complaint or initialStatus changes
   useEffect(() => {
@@ -131,6 +165,10 @@ export const ComplaintDetailModal: React.FC<ComplaintDetailModalProps> = ({
       );
       setIsSaved(false);
       setUploadError(null);
+
+      if (complaint.id) {
+        loadComplaintKnowledge(complaint.id);
+      }
     }
   }, [complaint, initialStatus]);
 
@@ -441,6 +479,14 @@ export const ComplaintDetailModal: React.FC<ComplaintDetailModalProps> = ({
             </div>
           </div>
 
+          {/* Grounded Municipal SOP & Knowledge Support Guidance */}
+          <KnowledgeGuidanceCard
+            guidance={knowledgeGuidance}
+            isLoading={isKnowledgeLoading}
+            onRefresh={() => complaint?.id && loadComplaintKnowledge(complaint.id)}
+            title="Municipal SOP & Resolution Guidance"
+          />
+
           {/* Location & Citizen details */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-1">
@@ -661,6 +707,17 @@ export const ComplaintDetailModal: React.FC<ComplaintDetailModalProps> = ({
 
         {/* Modal Footer */}
         <div className="p-4 border-t border-slate-100 bg-slate-50/80 flex items-center justify-end gap-2">
+          {((complaint.status as string) === 'Resolved' || (complaint.status as string) === 'RESOLVED') && (
+            <button
+              type="button"
+              onClick={handleFinalClose}
+              disabled={isClosing}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition cursor-pointer inline-flex items-center gap-1.5 shadow-xs"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>{isClosing ? 'Closing...' : 'Finalize Official Closure'}</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}

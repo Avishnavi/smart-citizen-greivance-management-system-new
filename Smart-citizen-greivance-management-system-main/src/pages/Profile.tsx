@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useComplaints } from '../context/ComplaintContext';
-import { useNotifications } from '../context/NotificationContext';
 import {
   User,
   Mail,
@@ -12,16 +11,15 @@ import {
   CheckCircle2,
   Edit,
   Save,
-  RotateCcw,
   Building,
   Smartphone,
-  MessageSquare
+  MessageSquare,
+  ShieldCheck,
 } from 'lucide-react';
 
 export const Profile: React.FC = () => {
-  const { profile, updateProfile, setLanguage, resetProfile } = useAuth();
-  const { resetAllToDefault, complaints } = useComplaints();
-  const { clearNotifications } = useNotifications();
+  const { profile, updateProfile, setLanguage } = useAuth();
+  const { complaints } = useComplaints();
 
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({
@@ -49,15 +47,6 @@ export const Profile: React.FC = () => {
         [key]: !profile.notificationPreferences[key]
       }
     });
-  };
-
-  const handleResetDemo = () => {
-    if (window.confirm('Reset all demo complaints and profile data to initial factory state?')) {
-      resetAllToDefault();
-      resetProfile();
-      clearNotifications();
-      alert('Demo data has been reset to defaults.');
-    }
   };
 
   const languages = [
@@ -340,26 +329,22 @@ export const Profile: React.FC = () => {
         </div>
       </div>
 
-      {/* Ward Info & Demo Reset Box */}
+      {/* Official Ward Support Information */}
       <div className="bg-slate-900 text-white rounded-3xl p-6 shadow-md flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="space-y-1 text-center sm:text-left">
           <div className="flex items-center justify-center sm:justify-start gap-2">
             <Building className="w-4 h-4 text-sky-400" />
-            <h4 className="font-bold text-sm">Zone 8 Municipal Ward Office</h4>
+            <h4 className="font-bold text-sm">Zone {profile.zone || 'Municipal'} Ward Office</h4>
           </div>
           <p className="text-xs text-slate-400">
-            Assistant Commissioner Office • 2nd Avenue, Anna Nagar • Phone: 044-2615 0000
+            Assistant Commissioner Office • Ward {profile.ward || 'General'} • Civic Grievance Helpline: 1913
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={handleResetDemo}
-          className="px-4 py-2 bg-slate-800 hover:bg-rose-900/80 text-rose-300 hover:text-white text-xs font-bold rounded-2xl border border-slate-700 transition flex items-center gap-1.5 whitespace-nowrap"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          <span>Reset Demo Data</span>
-        </button>
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs text-emerald-400 font-semibold">
+          <ShieldCheck className="w-4 h-4 text-emerald-400" />
+          <span>Verified Citizen Account</span>
+        </div>
       </div>
     </div>
   );

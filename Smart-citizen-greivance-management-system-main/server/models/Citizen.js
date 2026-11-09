@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const CitizenSchema = new mongoose.Schema(
   {
     citizenId: { type: String, required: true, unique: true, index: true },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     name: { type: String, required: true },
     email: { type: String, default: '' },
     phone: { type: String, default: '' },
